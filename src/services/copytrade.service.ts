@@ -105,7 +105,7 @@ export class CopytradeService {
               break;
             }
 
-            await this.processTrade(trade, savedConfig, dryRun, allowAddToPosition);
+            await this.processTrade(trade, savedConfig, dryRun, allowAddToPosition, verbose);
           }
 
           // Update last processed timestamp
@@ -141,13 +141,16 @@ export class CopytradeService {
     trade: PolymarketTrade,
     config: CopytradeConfig,
     dryRun: boolean,
-    allowAddToPosition: boolean
+    allowAddToPosition: boolean,
+    verbose: boolean
   ): Promise<void> {
     // Skip if we already have this position (unless flag is set)
     if (!allowAddToPosition && this.heldPositions.has(trade.asset)) {
-      console.log(`\n⏭️  Skipping trade (already hold position):`);
-      console.log(`  Market: ${trade.title} - ${trade.outcome}`);
-      console.log(`  Reason: Already have position in this market`);
+      if (verbose) {
+        console.log(`\n⏭️  Skipping trade (already hold position):`);
+        console.log(`  Market: ${trade.title} - ${trade.outcome}`);
+        console.log(`  Reason: Already have position in this market`);
+      }
       return;
     }
 
@@ -168,17 +171,21 @@ export class CopytradeService {
     }
 
     if (tradeAmount <= 0) {
-      console.log('Trade amount too small or no budget remaining. Skipping.');
+      if (verbose) {
+        console.log('Trade amount too small or no budget remaining. Skipping.');
+      }
       return;
     }
 
     // Check against Polymarket minimum order size ($1)
     if (tradeAmount < MIN_ORDER_SIZE_USD) {
-      console.log(`\n⏭️  Skipping trade (below $1 minimum):`);
-      console.log(`  Market: ${trade.title} - ${trade.outcome}`);
-      console.log(`  Original trade: $${originalCost.toFixed(2)} (${originalSize.toFixed(2)} shares @ $${price.toFixed(4)})`);
-      console.log(`  Your copy (${config.copyPercentage}%): $${tradeAmount.toFixed(2)}`);
-      console.log(`  Reason: Polymarket requires minimum $1 orders`);
+      if (verbose) {
+        console.log(`\n⏭️  Skipping trade (below $1 minimum):`);
+        console.log(`  Market: ${trade.title} - ${trade.outcome}`);
+        console.log(`  Original trade: $${originalCost.toFixed(2)} (${originalSize.toFixed(2)} shares @ $${price.toFixed(4)})`);
+        console.log(`  Your copy (${config.copyPercentage}%): $${tradeAmount.toFixed(2)}`);
+        console.log(`  Reason: Polymarket requires minimum $1 orders`);
+      }
       return;
     }
 
