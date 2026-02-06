@@ -5,6 +5,7 @@ interface SetupResult {
   success: boolean;
   address?: string;
   apiKey?: string;
+  isNewCredentials?: boolean;
   error?: string;
 }
 
@@ -14,7 +15,14 @@ export class AccountService {
       const client = new PolymarketClient(config);
 
       // Derive API credentials from the private key
+      console.log('  Checking credentials...');
       const credentials = await client.deriveApiCredentials();
+
+      if (credentials.isNew) {
+        console.log('  Creating new credentials... ✓');
+      } else {
+        console.log('  Using existing credentials ✓');
+      }
 
       // Verify the account can connect
       const isValid = await client.validateConnection();
@@ -45,6 +53,7 @@ export class AccountService {
         success: true,
         address: config.funderAddress,
         apiKey: credentials.apiKey,
+        isNewCredentials: credentials.isNew,
       };
     } catch (error) {
       return {

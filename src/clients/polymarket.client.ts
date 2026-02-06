@@ -72,7 +72,7 @@ export class PolymarketClient {
     this.config = config;
   }
 
-  async deriveApiCredentials(): Promise<ApiCredentials> {
+  async deriveApiCredentials(): Promise<ApiCredentials & { isNew: boolean }> {
     // Create a wallet from the private key
     const wallet = new Wallet(this.config.privateKey);
 
@@ -83,8 +83,33 @@ export class PolymarketClient {
     // First, create the client without credentials to derive them
     const tempClient = new ClobClient(host, chainId, wallet);
 
-    // Derive API credentials
-    const creds = await tempClient.createOrDeriveApiKey();
+    // Suppress the library's noisy error logging during credential derivation
+    const originalConsoleLog = console.log;
+    const originalConsoleError = console.error;
+    let wasCreated = true; // Assume new unless we see the "already exists" error
+
+    console.log = (...args: any[]) => {
+      const msg = args.join(' ');
+      if (msg.includes('[CLOB Client]')) return; // Suppress library logs
+      originalConsoleLog.apply(console, args);
+    };
+    console.error = (...args: any[]) => {
+      const msg = args.join(' ');
+      if (msg.includes('[CLOB Client]') || msg.includes('Could not create api key')) {
+        wasCreated = false; // Key already exists, we're deriving
+        return;
+      }
+      originalConsoleError.apply(console, args);
+    };
+
+    let creds;
+    try {
+      creds = await tempClient.createOrDeriveApiKey();
+    } finally {
+      // Restore console functions
+      console.log = originalConsoleLog;
+      console.error = originalConsoleError;
+    }
 
     if (!creds || !creds.key) {
       throw new Error('Failed to derive API credentials. Make sure you have enabled trading on polymarket.com with this wallet first.');
@@ -111,7 +136,7 @@ export class PolymarketClient {
       this.config.funderAddress
     );
 
-    return this.credentials;
+    return { ...this.credentials, isNew: wasCreated };
   }
 
   async validateConnection(): Promise<boolean> {
@@ -139,9 +164,6 @@ export class PolymarketClient {
         'check POL balance'
       );
       const polAmount = parseFloat(polBalance.toString()) / 1e18;
-      if (polAmount < 0.01) {
-        console.log(`  ⚠️  Warning: Low POL balance (${polAmount.toFixed(4)} POL). You need POL for gas fees on Polygon.`);
-      }
 
       // Check USDC.e (bridged) - this is what Polymarket uses
       const usdcEContract = new Contract(USDC_E_ADDRESS, ERC20_ABI, provider);
@@ -165,9 +187,22 @@ export class PolymarketClient {
       );
       const usdcNativeAmount = parseFloat(usdcNativeBalance.toString()) / Math.pow(10, usdcNativeDecimals);
 
+      // Display balances
+      console.log(`  USDC.e: $${usdcEAmount.toFixed(2)}`);
+      console.log(`  POL (gas): ${polAmount.toFixed(4)} POL`);
+
+      // Warnings
+      if (polAmount < 0.01) {
+        console.log(`\n  ⚠️  Low POL balance! You need POL for gas fees on Polygon.`);
+      }
+
       if (usdcNativeAmount > 0 && usdcEAmount === 0) {
-        console.log(`  ⚠️  Warning: You have $${usdcNativeAmount.toFixed(2)} native USDC, but Polymarket uses USDC.e (bridged)`);
+        console.log(`\n  ⚠️  You have $${usdcNativeAmount.toFixed(2)} native USDC, but Polymarket uses USDC.e (bridged)`);
         console.log(`  ⚠️  Swap native USDC to USDC.e on a DEX like Uniswap/QuickSwap`);
+      }
+
+      if (usdcEAmount === 0) {
+        console.log(`\n  ⚠️  No USDC.e balance. Deposit USDC.e to start trading.`);
       }
 
       // Return USDC.e balance (what Polymarket uses)
@@ -326,11 +361,20 @@ export class PolymarketClient {
           console.log(' ✓');
         }
 
-        console.log('\n  All approvals complete!');
+        // Show final status with newly approved ones marked
+        console.log('');
+        for (const contract of EXCHANGE_CONTRACTS) {
+          const wasJustApproved = contractsNeedingApproval.some(c => c.address === contract.address);
+          if (wasJustApproved) {
+            console.log(`  ✓ ${contract.name} approved`);
+          } else {
+            console.log(`  ✓ ${contract.name} (already approved)`);
+          }
+        }
       } else {
         // All already approved - show status
         for (const contract of EXCHANGE_CONTRACTS) {
-          console.log(`  ✓ ${contract.name} approved`);
+          console.log(`  ✓ ${contract.name} (already approved)`);
         }
       }
 

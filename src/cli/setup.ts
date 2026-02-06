@@ -16,7 +16,7 @@ export const setupAccountCommand = new Command('setup-account')
         process.exit(1);
       }
 
-      console.log('Setting up account...');
+      console.log('Setting up account...\n');
 
       const accountService = new AccountService();
       const result = await accountService.setupAccount({
@@ -25,9 +25,9 @@ export const setupAccountCommand = new Command('setup-account')
       });
 
       if (result.success) {
-        console.log('\n✓ Account setup successful!');
+        console.log('\n✓ Account setup complete!');
         console.log(`  Address: ${result.address}`);
-        console.log(`  API Key: ${result.apiKey ? 'Generated' : 'Using existing'}`);
+        console.log(`  API Key: Ready`);
         console.log('\nYou can now start copytrading with: copytrader copytrade --help');
       } else {
         console.error('\n✗ Account setup failed:', result.error);
