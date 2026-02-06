@@ -16,6 +16,7 @@ export interface CopytradeConfig {
   copyPercentage: number;
   maxTradeSize: number;
   isActive: boolean;
+  reinvest: boolean;  // Whether to add sell proceeds back to budget
   createdAt?: string;
 }
 
@@ -74,5 +75,5 @@ export interface TokenInfo {
 export interface OrderRequest {
   tokenId: string;
   side: 'BUY' | 'SELL';
-  amount: number; // Dollar amount for BUY orders
+  amount: number; // Dollar amount for BUY, share count for SELL
 }

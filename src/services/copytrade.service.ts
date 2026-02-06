@@ -10,7 +10,6 @@ export class CopytradeService {
   private repository: TradeRepository;
   private isRunning: boolean = false;
   private pollInterval: number = 2000; // 2 seconds (matches Polygon block time)
-  private heldPositions: Set<string> = new Set();
 
   constructor(accountConfig: AccountConfig) {
     this.client = new PolymarketClient(accountConfig);
@@ -28,9 +27,6 @@ export class CopytradeService {
     const configId = savedConfig.id!;
 
     this.isRunning = true;
-
-    // Load existing held positions from database
-    this.heldPositions = this.repository.getHeldPositions();
 
     // Use Unix timestamp (seconds) for comparison
     let lastProcessedTimestamp = Math.floor(Date.now() / 1000);
@@ -68,18 +64,17 @@ export class CopytradeService {
           console.log(`[${pollTime}] Fetched ${trades.length} total trades from API`);
         }
 
-        // Filter to only new trades (after our start time) and BUY orders only
+        // Filter to only new trades (after our start time) - both BUY and SELL
         const newTrades = trades.filter((trade) => {
           const isNew = trade.timestamp > lastProcessedTimestamp;
-          const isBuy = trade.side === 'BUY';
           const notProcessed = !this.repository.isTradeProcessed(trade.transactionHash);
-          return isNew && isBuy && notProcessed;
+          return isNew && notProcessed;
         });
 
         if (verbose) {
-          const buyTrades = trades.filter(t => t.side === 'BUY').length;
-          const recentTrades = trades.filter(t => t.timestamp > lastProcessedTimestamp).length;
-          console.log(`[${pollTime}] Filtered: ${recentTrades} recent, ${buyTrades} buys, ${newTrades.length} new to copy`);
+          const buyTrades = newTrades.filter(t => t.side === 'BUY').length;
+          const sellTrades = newTrades.filter(t => t.side === 'SELL').length;
+          console.log(`[${pollTime}] Filtered: ${newTrades.length} new trades (${buyTrades} buys, ${sellTrades} sells)`);
 
           // Show the most recent trade timestamp for debugging
           if (trades.length > 0) {
@@ -90,19 +85,15 @@ export class CopytradeService {
         }
 
         if (newTrades.length > 0) {
-          console.log(`\n🎯 Found ${newTrades.length} new trade(s) to copy!`);
+          const buys = newTrades.filter(t => t.side === 'BUY').length;
+          const sells = newTrades.filter(t => t.side === 'SELL').length;
+          console.log(`\n🎯 Found ${newTrades.length} new trade(s) to copy! (${buys} buys, ${sells} sells)`);
 
           for (const trade of newTrades) {
             // Refresh budget from DB before each trade to ensure accurate tracking
             const freshConfig = this.repository.getConfig(configId);
             if (freshConfig) {
               savedConfig.remainingBudget = freshConfig.remainingBudget;
-            }
-
-            // Stop if budget exhausted
-            if (savedConfig.remainingBudget <= 0) {
-              console.log('Budget exhausted. Stopping.');
-              break;
             }
 
             await this.processTrade(trade, savedConfig, dryRun, allowAddToPosition, verbose);
@@ -115,14 +106,6 @@ export class CopytradeService {
           lastProcessedTimestamp = latestTrade.timestamp;
         } else if (verbose) {
           console.log(`[${pollTime}] No new trades to copy\n`);
-        }
-
-        // Update remaining budget from database
-        const currentConfig = this.repository.getConfig(configId);
-        if (currentConfig && currentConfig.remainingBudget <= 0) {
-          console.log('Budget exhausted. Stopping copytrade.');
-          this.isRunning = false;
-          break;
         }
 
       } catch (error) {
@@ -144,12 +127,25 @@ export class CopytradeService {
     allowAddToPosition: boolean,
     verbose: boolean
   ): Promise<void> {
-    // Skip if we already have this position (unless flag is set)
-    if (!allowAddToPosition && this.heldPositions.has(trade.asset)) {
+    if (trade.side === 'BUY') {
+      await this.processBuyTrade(trade, config, dryRun, allowAddToPosition, verbose);
+    } else {
+      await this.processSellTrade(trade, config, dryRun, verbose);
+    }
+  }
+
+  private async processBuyTrade(
+    trade: PolymarketTrade,
+    config: CopytradeConfig,
+    dryRun: boolean,
+    allowAddToPosition: boolean,
+    verbose: boolean
+  ): Promise<void> {
+    // Skip if we already have this position in THIS session (unless flag is set)
+    if (!allowAddToPosition && this.repository.hasSessionPosition(config.id!, trade.asset)) {
       if (verbose) {
-        console.log(`\n⏭️  Skipping trade (already hold position):`);
+        console.log(`\n⏭️  Skipping BUY (already hold position in this session):`);
         console.log(`  Market: ${trade.title} - ${trade.outcome}`);
-        console.log(`  Reason: Already have position in this market`);
       }
       return;
     }
@@ -166,6 +162,13 @@ export class CopytradeService {
 
     // Check against remaining budget
     if (tradeAmount > config.remainingBudget) {
+      if (config.remainingBudget <= 0) {
+        if (verbose) {
+          console.log(`\n⏭️  Skipping BUY (no budget, waiting for sells):`);
+          console.log(`  Market: ${trade.title} - ${trade.outcome}`);
+        }
+        return;
+      }
       console.log(`Adjusted trade amount from $${tradeAmount.toFixed(2)} to $${config.remainingBudget.toFixed(2)} due to budget constraint`);
       tradeAmount = config.remainingBudget;
     }
@@ -180,11 +183,10 @@ export class CopytradeService {
     // Check against Polymarket minimum order size ($1)
     if (tradeAmount < MIN_ORDER_SIZE_USD) {
       if (verbose) {
-        console.log(`\n⏭️  Skipping trade (below $1 minimum):`);
+        console.log(`\n⏭️  Skipping BUY (below $1 minimum):`);
         console.log(`  Market: ${trade.title} - ${trade.outcome}`);
         console.log(`  Original trade: $${originalCost.toFixed(2)} (${originalSize.toFixed(2)} shares @ $${price.toFixed(4)})`);
         console.log(`  Your copy (${config.copyPercentage}%): $${tradeAmount.toFixed(2)}`);
-        console.log(`  Reason: Polymarket requires minimum $1 orders`);
       }
       return;
     }
@@ -192,11 +194,11 @@ export class CopytradeService {
     // Estimate shares we'll get (actual may vary based on market)
     const estimatedShares = tradeAmount / price;
 
-    console.log(`\n📈 Processing trade:`);
+    console.log(`\n📈 Processing BUY:`);
     console.log(`  Market: ${trade.title}`);
     console.log(`  Outcome: ${trade.outcome}`);
-    console.log(`  Original: ${trade.side} $${originalCost.toFixed(2)} (${originalSize.toFixed(2)} shares @ $${price.toFixed(4)})`);
-    console.log(`  Our order: $${tradeAmount.toFixed(2)} (~${estimatedShares.toFixed(2)} shares at current price)`);
+    console.log(`  Original: BUY $${originalCost.toFixed(2)} (${originalSize.toFixed(2)} shares @ $${price.toFixed(4)})`);
+    console.log(`  Our order: BUY $${tradeAmount.toFixed(2)} (~${estimatedShares.toFixed(2)} shares)`);
 
     const executedTrade: ExecutedTrade = {
       configId: config.id!,
@@ -204,7 +206,7 @@ export class CopytradeService {
       traderAddress: config.traderAddress,
       market: trade.title,
       assetId: trade.asset,
-      side: trade.side,
+      side: 'BUY',
       originalSize,
       executedSize: estimatedShares,
       price,
@@ -212,7 +214,7 @@ export class CopytradeService {
     };
 
     if (dryRun) {
-      console.log('  [DRY RUN] Would execute this trade');
+      console.log('  [DRY RUN] Would execute this BUY');
       executedTrade.status = 'SUCCESS';
       executedTrade.orderId = 'dry-run';
     } else {
@@ -227,19 +229,17 @@ export class CopytradeService {
         if (result.success && result.orderId) {
           executedTrade.status = 'SUCCESS';
           executedTrade.orderId = result.orderId;
-          console.log(`  ✓ Trade executed! Order ID: ${result.orderId}`);
+          console.log(`  ✓ BUY executed! Order ID: ${result.orderId}`);
 
           // Update remaining budget in DB and in-memory
           const newBudget = config.remainingBudget - tradeAmount;
           this.repository.updateBudget(config.id!, newBudget);
           config.remainingBudget = newBudget;
-
-          // Track that we now hold this position
-          this.heldPositions.add(trade.asset);
+          console.log(`  Budget remaining: $${newBudget.toFixed(2)}`);
         } else {
           executedTrade.status = 'FAILED';
           executedTrade.errorMessage = result.errorMessage || 'Order submission failed - no order ID returned';
-          console.error(`  ✗ Trade failed: ${executedTrade.errorMessage}`);
+          console.error(`  ✗ BUY failed: ${executedTrade.errorMessage}`);
         }
 
       } catch (error) {
@@ -255,11 +255,119 @@ export class CopytradeService {
         // Other errors - log and continue
         executedTrade.status = 'FAILED';
         executedTrade.errorMessage = errorMsg;
-        console.error(`  ✗ Trade failed: ${errorMsg}`);
+        console.error(`  ✗ BUY failed: ${errorMsg}`);
       }
     }
 
     // Save executed trade to database
+    this.saveTradeRecord(executedTrade);
+  }
+
+  private async processSellTrade(
+    trade: PolymarketTrade,
+    config: CopytradeConfig,
+    dryRun: boolean,
+    verbose: boolean
+  ): Promise<void> {
+    // Check if we have a position to sell in THIS session
+    const position = this.repository.getSessionPosition(config.id!, trade.asset);
+
+    if (position.shares <= 0) {
+      if (verbose) {
+        console.log(`\n⏭️  Skipping SELL (no position in this session):`);
+        console.log(`  Market: ${trade.title} - ${trade.outcome}`);
+      }
+      return;
+    }
+
+    // Calculate their sell value in dollars
+    const theirSellValue = trade.size * trade.price;
+
+    // Calculate our proportional sell value
+    let ourSellValue = (theirSellValue * config.copyPercentage) / 100;
+
+    // Cap at our position value (can't sell more than we have)
+    if (ourSellValue > position.costBasis) {
+      console.log(`Capping sell from $${ourSellValue.toFixed(2)} to $${position.costBasis.toFixed(2)} (our full position)`);
+      ourSellValue = position.costBasis;
+    }
+
+    // Check minimum order size
+    if (ourSellValue < MIN_ORDER_SIZE_USD) {
+      if (verbose) {
+        console.log(`\n⏭️  Skipping SELL (below $1 minimum):`);
+        console.log(`  Market: ${trade.title} - ${trade.outcome}`);
+        console.log(`  Our sell value: $${ourSellValue.toFixed(2)}`);
+      }
+      return;
+    }
+
+    // Calculate shares to sell based on current price
+    const sharesToSell = ourSellValue / trade.price;
+
+    console.log(`\n📉 Processing SELL:`);
+    console.log(`  Market: ${trade.title}`);
+    console.log(`  Outcome: ${trade.outcome}`);
+    console.log(`  Original: SELL $${theirSellValue.toFixed(2)} (${trade.size.toFixed(2)} shares @ $${trade.price.toFixed(4)})`);
+    console.log(`  Our order: SELL ~$${ourSellValue.toFixed(2)} (~${sharesToSell.toFixed(2)} shares)`);
+    console.log(`  Our position: ${position.shares.toFixed(2)} shares worth ~$${position.costBasis.toFixed(2)}`);
+
+    const executedTrade: ExecutedTrade = {
+      configId: config.id!,
+      originalTradeId: trade.transactionHash,
+      traderAddress: config.traderAddress,
+      market: trade.title,
+      assetId: trade.asset,
+      side: 'SELL',
+      originalSize: trade.size,
+      executedSize: sharesToSell,
+      price: trade.price,
+      status: 'PENDING',
+    };
+
+    if (dryRun) {
+      console.log('  [DRY RUN] Would execute this SELL');
+      executedTrade.status = 'SUCCESS';
+      executedTrade.orderId = 'dry-run';
+    } else {
+      try {
+        // Execute SELL order via CLOB API (amount is in shares for SELL)
+        const result = await this.client.placeMarketOrder({
+          tokenId: trade.asset,
+          side: 'SELL',
+          amount: sharesToSell,
+        });
+
+        if (result.success && result.orderId) {
+          executedTrade.status = 'SUCCESS';
+          executedTrade.orderId = result.orderId;
+          console.log(`  ✓ SELL executed! Order ID: ${result.orderId}`);
+
+          // Add proceeds back to budget if reinvest is enabled
+          if (config.reinvest) {
+            const proceeds = sharesToSell * trade.price;
+            const newBudget = config.remainingBudget + proceeds;
+            this.repository.updateBudget(config.id!, newBudget);
+            config.remainingBudget = newBudget;
+            console.log(`  💰 Added $${proceeds.toFixed(2)} back to budget (now $${newBudget.toFixed(2)})`);
+          }
+        } else {
+          executedTrade.status = 'FAILED';
+          executedTrade.errorMessage = result.errorMessage || 'SELL order failed';
+          console.error(`  ✗ SELL failed: ${executedTrade.errorMessage}`);
+        }
+      } catch (error) {
+        executedTrade.status = 'FAILED';
+        executedTrade.errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`  ✗ SELL failed: ${executedTrade.errorMessage}`);
+      }
+    }
+
+    // Save executed trade to database
+    this.saveTradeRecord(executedTrade);
+  }
+
+  private saveTradeRecord(executedTrade: ExecutedTrade): void {
     try {
       this.repository.saveTrade(executedTrade);
     } catch (error) {
@@ -278,20 +386,25 @@ export class CopytradeService {
 
     const successful = trades.filter(t => t.status === 'SUCCESS');
     const failed = trades.filter(t => t.status === 'FAILED');
-    const totalSpent = config ? config.budget - config.remainingBudget : 0;
+    const buys = successful.filter(t => t.side === 'BUY');
+    const sells = successful.filter(t => t.side === 'SELL');
+
+    const totalBought = buys.reduce((sum, t) => sum + (t.executedSize * t.price), 0);
+    const totalSold = sells.reduce((sum, t) => sum + (t.executedSize * t.price), 0);
 
     console.log('\n' + '='.repeat(50));
     console.log('📊 COPYTRADE SESSION SUMMARY');
     console.log('='.repeat(50));
-    console.log(`  Trades executed: ${successful.length}`);
+    console.log(`  BUY trades executed: ${buys.length}`);
+    console.log(`  SELL trades executed: ${sells.length}`);
     console.log(`  Trades failed: ${failed.length}`);
-    console.log(`  Total spent: $${totalSpent.toFixed(2)}`);
+    console.log(`  Total bought: $${totalBought.toFixed(2)}`);
+    console.log(`  Total sold: $${totalSold.toFixed(2)}`);
     console.log(`  Remaining budget: $${config?.remainingBudget.toFixed(2) || '0.00'}`);
-    console.log(`  Positions entered: ${successful.length}`);
 
-    if (successful.length > 0) {
+    if (buys.length > 0) {
       console.log('\n  Markets entered:');
-      const markets = [...new Set(successful.map(t => t.market))];
+      const markets = [...new Set(buys.map(t => t.market))];
       markets.forEach(m => console.log(`    • ${m}`));
     }
     console.log('='.repeat(50) + '\n');

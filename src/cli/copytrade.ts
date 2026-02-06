@@ -12,6 +12,7 @@ export const copytradeCommand = new Command('copytrade')
   .option('--dry-run', 'Simulate trades without executing', false)
   .option('-v, --verbose', 'Show detailed polling activity', false)
   .option('--allow-add-to-position', 'Allow buying more of positions you already hold', false)
+  .option('--no-reinvest', 'Do not add sell proceeds back to budget')
   .action(async (options) => {
     try {
       const privateKey = process.env.PRIVATE_KEY;
@@ -65,6 +66,7 @@ export const copytradeCommand = new Command('copytrade')
         copyPercentage: options.percentage,
         maxTradeSize: options.maxTrade,
         isActive: true,
+        reinvest: options.reinvest !== false,  // Default true, --no-reinvest sets false
       };
 
       console.log('\n🔄 Starting copytrading...');
@@ -75,6 +77,7 @@ export const copytradeCommand = new Command('copytrade')
       console.log(`  Dry Run: ${options.dryRun ? 'Yes' : 'No'}`);
       console.log(`  Verbose: ${options.verbose ? 'Yes' : 'No'}`);
       console.log(`  Allow Add to Position: ${options.allowAddToPosition ? 'Yes' : 'No'}`);
+      console.log(`  Reinvest Proceeds: ${config.reinvest ? 'Yes' : 'No'}`);
       console.log('\nMonitoring for new trades... (Press Ctrl+C to stop)\n');
 
       const copytradeService = new CopytradeService({

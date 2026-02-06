@@ -10,6 +10,7 @@ export class TradeRepository {
   constructor() {
     this.db = new Database(DB_PATH);
     this.initializeSchema();
+    this.migrateSchema();
   }
 
   private initializeSchema(): void {
@@ -54,11 +55,20 @@ export class TradeRepository {
     `);
   }
 
+  private migrateSchema(): void {
+    // Add reinvest column if it doesn't exist
+    const tableInfo = this.db.prepare('PRAGMA table_info(copytrade_configs)').all() as any[];
+    const hasReinvest = tableInfo.some((col: any) => col.name === 'reinvest');
+    if (!hasReinvest) {
+      this.db.exec('ALTER TABLE copytrade_configs ADD COLUMN reinvest INTEGER DEFAULT 1');
+    }
+  }
+
   // Config operations
   saveConfig(config: CopytradeConfig): CopytradeConfig {
     const stmt = this.db.prepare(`
-      INSERT INTO copytrade_configs (trader_address, budget, remaining_budget, copy_percentage, max_trade_size, is_active)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO copytrade_configs (trader_address, budget, remaining_budget, copy_percentage, max_trade_size, is_active, reinvest)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -67,7 +77,8 @@ export class TradeRepository {
       config.remainingBudget,
       config.copyPercentage,
       config.maxTradeSize,
-      config.isActive ? 1 : 0
+      config.isActive ? 1 : 0,
+      config.reinvest ? 1 : 0
     );
 
     return {
@@ -166,6 +177,41 @@ export class TradeRepository {
     return new Set(rows.map(r => r.asset_id));
   }
 
+  getSessionPosition(configId: number, assetId: string): { shares: number; costBasis: number } {
+    const stmt = this.db.prepare(`
+      SELECT
+        side,
+        SUM(executed_size) as total_shares,
+        SUM(executed_size * price) as total_value
+      FROM executed_trades
+      WHERE config_id = ? AND asset_id = ? AND status = 'SUCCESS'
+      GROUP BY side
+    `);
+
+    const rows = stmt.all(configId, assetId) as any[];
+
+    let buyShares = 0, buyValue = 0, sellShares = 0;
+    for (const row of rows) {
+      if (row.side === 'BUY') {
+        buyShares = row.total_shares || 0;
+        buyValue = row.total_value || 0;
+      } else if (row.side === 'SELL') {
+        sellShares = row.total_shares || 0;
+      }
+    }
+
+    const netShares = buyShares - sellShares;
+    // Cost basis proportionally reduced by sells
+    const costBasis = netShares > 0 && buyShares > 0 ? (buyValue * (netShares / buyShares)) : 0;
+
+    return { shares: netShares, costBasis };
+  }
+
+  hasSessionPosition(configId: number, assetId: string): boolean {
+    const position = this.getSessionPosition(configId, assetId);
+    return position.shares > 0;
+  }
+
   getTradesByConfig(configId: number, limit: number = 10): ExecutedTrade[] {
     const stmt = this.db.prepare(`
       SELECT * FROM executed_trades
@@ -199,6 +245,7 @@ export class TradeRepository {
       copyPercentage: row.copy_percentage,
       maxTradeSize: row.max_trade_size,
       isActive: row.is_active === 1,
+      reinvest: row.reinvest === 1,
       createdAt: row.created_at,
     };
   }
