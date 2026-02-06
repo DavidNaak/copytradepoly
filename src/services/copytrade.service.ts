@@ -83,6 +83,18 @@ export class CopytradeService {
           console.log(`\n🎯 Found ${newTrades.length} new trade(s) to copy!`);
 
           for (const trade of newTrades) {
+            // Refresh budget from DB before each trade to ensure accurate tracking
+            const freshConfig = this.repository.getConfig(configId);
+            if (freshConfig) {
+              savedConfig.remainingBudget = freshConfig.remainingBudget;
+            }
+
+            // Stop if budget exhausted
+            if (savedConfig.remainingBudget <= 0) {
+              console.log('Budget exhausted. Stopping.');
+              break;
+            }
+
             await this.processTrade(trade, savedConfig, dryRun);
           }
 
@@ -188,8 +200,10 @@ export class CopytradeService {
           executedTrade.orderId = result.orderId;
           console.log(`  ✓ Trade executed! Order ID: ${result.orderId}`);
 
-          // Update remaining budget
-          this.repository.updateBudget(config.id!, config.remainingBudget - tradeAmount);
+          // Update remaining budget in DB and in-memory
+          const newBudget = config.remainingBudget - tradeAmount;
+          this.repository.updateBudget(config.id!, newBudget);
+          config.remainingBudget = newBudget;
         } else {
           executedTrade.status = 'FAILED';
           executedTrade.errorMessage = result.errorMessage || 'Order submission failed - no order ID returned';
@@ -204,7 +218,16 @@ export class CopytradeService {
     }
 
     // Save executed trade to database
-    this.repository.saveTrade(executedTrade);
+    try {
+      this.repository.saveTrade(executedTrade);
+    } catch (error) {
+      // Ignore duplicate constraint errors (trade already recorded)
+      if (error instanceof Error && error.message.includes('UNIQUE constraint')) {
+        console.log('  (Trade already recorded, skipping duplicate)');
+      } else {
+        throw error;
+      }
+    }
   }
 
   private sleep(ms: number): Promise<void> {
