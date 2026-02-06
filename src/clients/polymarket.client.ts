@@ -6,22 +6,21 @@ const CLOB_API_URL = process.env.CLOB_API_URL || 'https://clob.polymarket.com';
 const DATA_API_URL = 'https://data-api.polymarket.com';
 const POLYGON_RPC = process.env.POLYGON_RPC_URL || 'https://polygon-bor-rpc.publicnode.com';
 
-// Detect wallet type (EOA vs Proxy) by checking if address has contract code
-async function detectWalletType(address: string): Promise<{ type: 0 | 2; name: string }> {
-  const provider = new providers.JsonRpcProvider(POLYGON_RPC);
-  const code = await provider.getCode(address);
+// Detect wallet type (EOA vs Proxy) by comparing funder address with the wallet derived from private key
+// Note: We can't use getCode() because new proxy wallets use counterfactual deployment
+// (contract isn't deployed until first transaction, so getCode() returns '0x')
+function detectWalletType(funderAddress: string, privateKey: string): { type: 0 | 2; name: string } {
+  // Derive the EOA address from the private key
+  const wallet = new Wallet(privateKey);
+  const eoaAddress = wallet.address.toLowerCase();
+  const funderLower = funderAddress.toLowerCase();
 
-  // No code = EOA
-  if (code === '0x') {
+  // If funder address matches EOA derived from private key, it's an EOA wallet
+  // If they differ, the user provided a proxy wallet address
+  if (eoaAddress === funderLower) {
     return { type: 0, name: 'EOA (direct wallet)' };
   }
 
-  // EIP-7702 delegation indicator (0xef01) = EOA with delegation, treat as EOA
-  if (code.startsWith('0xef01')) {
-    return { type: 0, name: 'EOA (direct wallet)' };
-  }
-
-  // Has contract code = Proxy wallet (Gnosis Safe)
   return { type: 2, name: 'Proxy wallet' };
 }
 
@@ -141,10 +140,10 @@ export class PolymarketClient {
       apiPassphrase: creds.passphrase,
     };
 
-    // Auto-detect wallet type from funder address
+    // Auto-detect wallet type by comparing funder address with EOA derived from private key
     // Type 0 = EOA (direct wallet like MetaMask) - pays gas, needs approvals
     // Type 2 = Proxy wallet (Gnosis Safe via Polymarket.com) - no approvals needed
-    const walletInfo = await detectWalletType(this.config.funderAddress);
+    const walletInfo = detectWalletType(this.config.funderAddress, this.config.privateKey);
     this.signatureType = walletInfo.type;
     console.log(`  Wallet type: ${walletInfo.name}`);
 
