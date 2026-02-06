@@ -178,12 +178,18 @@ export class CopytradeService {
           size: tradeSize,
         });
 
-        executedTrade.status = 'SUCCESS';
-        executedTrade.orderId = result.orderId;
-        console.log(`  ✓ Trade executed! Order ID: ${result.orderId}`);
+        if (result.success && result.orderId) {
+          executedTrade.status = 'SUCCESS';
+          executedTrade.orderId = result.orderId;
+          console.log(`  ✓ Trade executed! Order ID: ${result.orderId}`);
 
-        // Update remaining budget
-        this.repository.updateBudget(config.id!, config.remainingBudget - tradeCost);
+          // Update remaining budget
+          this.repository.updateBudget(config.id!, config.remainingBudget - tradeCost);
+        } else {
+          executedTrade.status = 'FAILED';
+          executedTrade.errorMessage = result.errorMessage || 'Order submission failed - no order ID returned';
+          console.error(`  ✗ Trade failed: ${executedTrade.errorMessage}`);
+        }
 
       } catch (error) {
         executedTrade.status = 'FAILED';

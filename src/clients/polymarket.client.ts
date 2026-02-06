@@ -23,6 +23,7 @@ interface ApiCredentials {
 interface OrderResult {
   orderId: string;
   success: boolean;
+  errorMessage?: string;
 }
 
 export class PolymarketClient {
@@ -196,8 +197,17 @@ export class PolymarketClient {
       // Submit the order
       const response = await this.clobClient!.postOrder(signedOrder);
 
+      // Verify we got a valid order ID back
+      if (!response.orderID) {
+        return {
+          orderId: '',
+          success: false,
+          errorMessage: 'No order ID returned from API',
+        };
+      }
+
       return {
-        orderId: response.orderID || 'unknown',
+        orderId: response.orderID,
         success: true,
       };
     } catch (error) {
