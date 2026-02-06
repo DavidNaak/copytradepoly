@@ -13,7 +13,7 @@ export class CopytradeService {
     this.repository = new TradeRepository();
   }
 
-  async start(config: CopytradeConfig, dryRun: boolean = false): Promise<void> {
+  async start(config: CopytradeConfig, dryRun: boolean = false, verbose: boolean = false): Promise<void> {
     // Save config to database
     const savedConfig = this.repository.saveConfig(config);
     const configId = savedConfig.id!;
@@ -22,6 +22,7 @@ export class CopytradeService {
 
     // Get initial timestamp to only process new trades
     let lastProcessedTime = new Date().toISOString();
+    let pollCount = 0;
 
     // Handle graceful shutdown
     process.on('SIGINT', () => {
@@ -32,12 +33,27 @@ export class CopytradeService {
     });
 
     console.log(`Config saved with ID: ${configId}`);
+    if (verbose) {
+      console.log(`Started monitoring at: ${lastProcessedTime}`);
+      console.log(`Poll interval: ${this.pollInterval / 1000}s\n`);
+    }
 
     // Main polling loop
     while (this.isRunning) {
       try {
+        pollCount++;
+        const pollTime = new Date().toLocaleTimeString();
+
+        if (verbose) {
+          console.log(`[${pollTime}] Poll #${pollCount} - Fetching trades...`);
+        }
+
         // Fetch recent trades from target trader
         const trades = await this.client.getTradesForAddress(config.traderAddress);
+
+        if (verbose) {
+          console.log(`[${pollTime}] Fetched ${trades.length} total trades from API`);
+        }
 
         // Filter to only new trades (after our start time) and BUY orders only
         const newTrades = trades.filter((trade) => {
@@ -47,8 +63,14 @@ export class CopytradeService {
           return isNew && isBuy && notProcessed;
         });
 
+        if (verbose) {
+          const buyTrades = trades.filter(t => t.side === 'BUY').length;
+          const recentTrades = trades.filter(t => t.match_time > lastProcessedTime).length;
+          console.log(`[${pollTime}] Filtered: ${recentTrades} recent, ${buyTrades} buys, ${newTrades.length} new to copy`);
+        }
+
         if (newTrades.length > 0) {
-          console.log(`Found ${newTrades.length} new trade(s) to copy`);
+          console.log(`\n🎯 Found ${newTrades.length} new trade(s) to copy!`);
 
           for (const trade of newTrades) {
             await this.processTrade(trade, savedConfig, dryRun);
@@ -59,6 +81,8 @@ export class CopytradeService {
             trade.match_time > latest.match_time ? trade : latest
           );
           lastProcessedTime = latestTrade.match_time;
+        } else if (verbose) {
+          console.log(`[${pollTime}] No new trades to copy\n`);
         }
 
         // Update remaining budget from database
