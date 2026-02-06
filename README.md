@@ -1,219 +1,390 @@
 # Polymarket Copytrader CLI
 
-A command-line copytrading bot for Polymarket that allows you to automatically mirror the trades of other traders.
+A command-line copytrading bot for Polymarket that automatically mirrors the trades of any trader you want to follow.
 
 ## Features
 
-- **Account Setup**: Initialize and validate your Polymarket account connection
-- **Copytrading**: Mirror trades from any Polymarket wallet address
-- **Configurable**: Set budget, copy percentage, and max trade size
-- **Persistent Storage**: SQLite database tracks configurations and trade history
-- **Dry Run Mode**: Test your configuration without executing real trades
-- **Status Monitoring**: View active configs and trade history
+| Feature | Description |
+|---------|-------------|
+| **BUY Copying** | Automatically copy BUY trades with configurable percentage |
+| **SELL Copying** | Exit positions when the trader sells |
+| **Session Tracking** | Each session tracks its own positions independently |
+| **Budget Reinvestment** | Sell proceeds automatically added back to budget |
+| **Dry Run Mode** | Test without executing real trades |
+| **P&L Tracking** | Session summary shows realized profit/loss |
 
-## Prerequisites
+---
 
-- Node.js v18+
-- A Polymarket account with trading enabled
-- Your MetaMask wallet private key
+## Quick Start
 
-### Wallet Types
-
-The bot supports two wallet types. **Choose based on whether you want to see trades in the Polymarket UI:**
-
-| Type | Address to Use | Trades in UI? | Gas Fees | Setup |
-|------|---------------|---------------|----------|-------|
-| **Proxy Wallet** | Your Polymarket proxy address | Yes | No (relayer pays) | Recommended |
-| **EOA (Direct)** | Your MetaMask address | No | Yes (you pay POL) | Advanced |
-
-**Proxy Wallet (Recommended)**
-- Trades appear in polymarket.com under your positions
-- No gas fees - Polymarket's relayer handles them
-- No token approvals needed
-- Use the proxy address shown in your Polymarket account settings
-
-**EOA (Direct Wallet)**
-- Trades do NOT appear in the Polymarket UI
-- You pay gas fees in POL
-- Requires one-time USDC.e token approvals
-- Use your MetaMask wallet address directly
-
-### Finding Your Proxy Wallet Address
-
-1. Go to polymarket.com and connect your MetaMask
-2. Open browser DevTools (F12) → Network tab
-3. Look for API requests - your proxy address appears in the responses
-4. Or check: `https://data-api.polymarket.com/profiles?user=YOUR_METAMASK_ADDRESS`
-
-The bot auto-detects which wallet type you're using based on the address in your `.env` file.
-
-## Installation
+### 1. Install
 
 ```bash
-# Clone the repository
 git clone <your-repo-url>
 cd polymarket-copytrader
-
-# Install dependencies
 npm install
-
-# Build the project
 npm run build
 ```
 
-## Configuration
+### 2. Configure
 
-1. Copy the example environment file:
 ```bash
 cp .env.example .env
 ```
 
-2. Edit `.env` with your credentials:
+Edit `.env`:
 ```
 PRIVATE_KEY=your_metamask_private_key
-FUNDER_ADDRESS=your_proxy_or_eoa_address
+FUNDER_ADDRESS=your_polymarket_proxy_address
 ```
 
-- `PRIVATE_KEY`: Your MetaMask private key (same for both wallet types)
-- `FUNDER_ADDRESS`: Either your proxy wallet address (recommended) or your MetaMask EOA address
-
-**IMPORTANT**: Never commit your `.env` file or share your private key.
-
-## Usage
-
-### Setup Account
-
-Initialize and validate your Polymarket account connection:
+### 3. Verify Setup
 
 ```bash
-# Using environment variables
 npm run dev -- setup-account
-
-# Or with command line flags
-npm run dev -- setup-account --private-key YOUR_KEY --address YOUR_ADDRESS
 ```
 
-### Start Copytrading
-
-Mirror trades from a target wallet:
+### 4. Start Copytrading
 
 ```bash
 npm run dev -- copytrade \
-  --trader 0xTARGET_WALLET_ADDRESS \
+  --trader 0xTRADER_ADDRESS \
   --budget 100 \
   --percentage 10 \
   --max-trade 20
 ```
 
-Options:
-- `-t, --trader <address>`: Wallet address to copy (required)
-- `-b, --budget <amount>`: Total budget in USDC (required)
-- `-p, --percentage <percent>`: Copy percentage (e.g., 10 = 10% of their trade) (required)
-- `-m, --max-trade <amount>`: Maximum amount per trade (required)
-- `--dry-run`: Simulate without executing trades
-- `-v, --verbose`: Show detailed polling activity
+---
 
-### Check Status
+## Commands
 
-View active configurations and trade history:
+### `setup-account`
+
+Verify your wallet connection and check balances.
+
+```bash
+npm run dev -- setup-account
+```
+
+**Output:**
+```
+Checking wallet balance and allowance...
+  Wallet Address: 0x5A75...C767
+  Wallet type: Proxy wallet
+  ✓ Proxy wallet - no approvals needed
+  USDC Balance: $100.00
+```
+
+---
+
+### `copytrade`
+
+Start copying a trader's positions.
+
+```bash
+npm run dev -- copytrade [options]
+```
+
+#### Required Options
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `-t, --trader <address>` | Wallet address to copy | `0x469c...309b` |
+| `-b, --budget <amount>` | Total budget in USDC | `100` |
+| `-p, --percentage <percent>` | Copy percentage of their trades | `10` (= 10%) |
+| `-m, --max-trade <amount>` | Maximum per trade | `20` |
+
+#### Optional Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | `false` | Simulate trades without executing |
+| `-v, --verbose` | `false` | Show detailed polling logs |
+| `--allow-add-to-position` | `false` | Buy more of positions you already hold |
+| `--no-reinvest` | `false` | Don't add sell proceeds back to budget |
+
+#### Examples
+
+**Basic copytrading:**
+```bash
+npm run dev -- copytrade -t 0x469c...309b -b 50 -p 100 -m 10
+```
+
+**Dry run to test:**
+```bash
+npm run dev -- copytrade -t 0x469c...309b -b 50 -p 100 -m 10 --dry-run
+```
+
+**Verbose mode for debugging:**
+```bash
+npm run dev -- copytrade -t 0x469c...309b -b 50 -p 100 -m 10 -v
+```
+
+**Allow stacking positions:**
+```bash
+npm run dev -- copytrade -t 0x469c...309b -b 50 -p 100 -m 10 --allow-add-to-position
+```
+
+---
+
+### `status`
+
+View active configurations and trade history.
 
 ```bash
 npm run dev -- status
-
-# Show trades for a specific config
 npm run dev -- status --config-id 1
-
-# Limit number of trades shown
-npm run dev -- status --limit 20
+npm run dev -- status --limit 50
 ```
 
-## Project Structure
-
-```
-src/
-├── cli/                  # CLI command handlers
-│   ├── setup.ts         # setup-account command
-│   ├── copytrade.ts     # copytrade command
-│   └── status.ts        # status command
-├── services/            # Business logic
-│   ├── account.service.ts
-│   └── copytrade.service.ts
-├── clients/             # External API clients
-│   └── polymarket.client.ts
-├── repositories/        # Data persistence
-│   └── trade.repository.ts
-├── types/               # TypeScript interfaces
-│   └── index.ts
-└── index.ts             # CLI entry point
-```
+---
 
 ## How It Works
 
-1. **Polling**: The bot polls the Polymarket API every 5 seconds for new trades from the target wallet
-2. **Filtering**: Only BUY orders after the copytrade start time are processed
-3. **Sizing**: Trade size is calculated as: `min(originalSize * copyPercentage, maxTradeSize, remainingBudget)`
-4. **Execution**: Market orders are placed via the CLOB API at the best available price
-5. **Tracking**: All executed trades are stored in SQLite for history and duplicate prevention
+### Architecture
+
+```
+┌─────────────────┐     Poll every 2s      ┌──────────────────┐
+│  Polymarket     │ ◄──────────────────── │  Copytrade Bot   │
+│  Data API       │                        │                  │
+└─────────────────┘                        │  ┌────────────┐  │
+        │                                  │  │ Session DB │  │
+        │ Trader's trades                  │  └────────────┘  │
+        ▼                                  │        │         │
+┌─────────────────┐     Place orders       │        ▼         │
+│  Polymarket     │ ◄──────────────────── │  Track positions │
+│  CLOB API       │                        │  Track budget    │
+└─────────────────┘                        └──────────────────┘
+```
+
+### BUY Order Logic
+
+When the trader BUYs, the bot decides what to do:
+
+| Condition | Action |
+|-----------|--------|
+| Already hold position (this session) | **Skip** (unless `--allow-add-to-position`) |
+| No budget remaining | **Skip**, wait for sells to free up budget |
+| Copy amount < $1 | **Skip** (Polymarket minimum) |
+| Copy amount > max trade | **Cap** at max trade size |
+| Copy amount > remaining budget | **Cap** at remaining budget |
+| Otherwise | **Execute BUY** |
+
+**BUY Amount Calculation:**
+```
+copyAmount = min(
+  traderBuyValue × copyPercentage,
+  maxTradeSize,
+  remainingBudget
+)
+```
+
+### SELL Order Logic
+
+When the trader SELLs, the bot decides what to do:
+
+| Condition | Action |
+|-----------|--------|
+| No position in this session | **Skip** |
+| No actual position (API check) | **Skip** |
+| Copy amount > actual position | **Cap** at actual position |
+| Otherwise | **Execute SELL** |
+
+**SELL Amount Calculation:**
+```
+sellAmount = min(
+  traderSellValue × copyPercentage,
+  actualPositionValue  ← fetched from Polymarket API
+)
+```
+
+### Budget Flow
+
+```
+Start: $100 budget
+        │
+        ▼
+   ┌─────────┐
+   │ BUY $20 │ ──► Budget: $80
+   └─────────┘
+        │
+        ▼
+   ┌─────────┐
+   │ BUY $30 │ ──► Budget: $50
+   └─────────┘
+        │
+        ▼
+   ┌──────────┐
+   │ SELL $25 │ ──► Budget: $75 (if reinvest enabled)
+   └──────────┘
+        │
+        ▼
+   Can BUY again with $75
+```
+
+### Session Summary
+
+When you stop the bot (Ctrl+C), you'll see:
+
+```
+==================================================
+📊 COPYTRADE SESSION SUMMARY
+==================================================
+  BUY trades executed: 5
+  SELL trades executed: 2
+  Trades failed: 0
+  Total bought: $5.00
+  Total sold: $2.80
+  Net deployed: $2.20
+  Realized P&L: +$0.15
+  Remaining budget: $1.80
+
+  Markets entered:
+    • Will Trump win 2028?
+    • US strikes Iran by June?
+==================================================
+```
+
+---
+
+## Wallet Setup
+
+### Option 1: Proxy Wallet (Recommended)
+
+Your Polymarket proxy wallet. Trades appear in the Polymarket UI.
+
+| Pros | Cons |
+|------|------|
+| Trades visible on polymarket.com | Need to find proxy address |
+| No gas fees (relayer pays) | - |
+| No token approvals needed | - |
+
+**Finding your proxy address:**
+1. Go to polymarket.com and connect MetaMask
+2. Open DevTools (F12) → Network tab
+3. Look for your proxy address in API responses
+4. Or visit: `https://data-api.polymarket.com/profiles?user=YOUR_METAMASK_ADDRESS`
+
+### Option 2: EOA (Direct Wallet)
+
+Your MetaMask address directly. Trades do NOT appear in Polymarket UI.
+
+| Pros | Cons |
+|------|------|
+| Simple setup | Trades not visible on polymarket.com |
+| - | You pay gas fees in POL |
+| - | Requires token approvals |
+
+---
 
 ## Common Issues
 
 ### Wrong USDC Type
 
-Polymarket uses **USDC.e (bridged)**, not native USDC on Polygon. If you see:
+Polymarket uses **USDC.e (bridged)**, not native USDC.
 
 ```
-Checking wallet balance...
-  Wallet Address: 0x75320178FcDd76C56ABb8939e090C9382D07E9Ae
-  ⚠️  Warning: You have $9.95 native USDC, but Polymarket uses USDC.e (bridged)
-  ⚠️  Swap native USDC to USDC.e on a DEX like Uniswap/QuickSwap
-  USDC Balance: $0.00
+⚠️  Warning: You have $9.95 native USDC, but Polymarket uses USDC.e
 ```
 
-**Solution**: Swap your native USDC to USDC.e on a DEX like [QuickSwap](https://quickswap.exchange/) or [Uniswap](https://app.uniswap.org/).
+**Solution:** Swap on [QuickSwap](https://quickswap.exchange/) or [Uniswap](https://app.uniswap.org/)
 
 ### Insufficient Balance
 
 ```
-Error: Insufficient balance. You have $0.00 but requested $1 budget.
-Either reduce your budget or add funds to your wallet.
+Error: Insufficient balance. You have $0.00 but requested $100 budget.
 ```
 
-**Solution**: Ensure you have USDC.e in your `FUNDER_ADDRESS`:
-- **Proxy wallet**: Deposit through polymarket.com
-- **EOA**: Send USDC.e directly to your MetaMask address on Polygon
+**Solution:**
+- Proxy wallet → Deposit through polymarket.com
+- EOA → Send USDC.e to your address on Polygon
 
-### Wallet Address Mismatch
+### SELL Fails with "not enough balance"
 
-If you're using a **proxy wallet** (recommended), make sure:
-1. `FUNDER_ADDRESS` is set to your proxy address, not your MetaMask address
-2. Funds are deposited through polymarket.com (they go to your proxy)
+The bot estimates shares when buying, but actual shares may differ due to slippage.
 
-If you're using **EOA** (direct wallet):
-1. `FUNDER_ADDRESS` should be your MetaMask address
-2. Send USDC.e directly to that address on Polygon
+**The bot handles this by:**
+- Fetching actual position from Polymarket API before selling
+- Using real share count, not estimated
 
-### "Could not create api key" Error
+If you still see errors, check network connectivity to `data-api.polymarket.com`.
 
-This is usually a temporary Polymarket API issue. The trade may still succeed - check the final status message.
+---
 
-## Limitations
+## Configuration Reference
 
-- Currently only handles BUY events (SELL events are out of scope per assignment)
-- Single wallet copytrading (multi-wallet support is a bonus feature)
-- No position exit logic (bonus feature)
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PRIVATE_KEY` | Yes | Your MetaMask private key |
+| `FUNDER_ADDRESS` | Yes | Proxy wallet or EOA address |
+| `POLYGON_RPC_URL` | No | Custom Polygon RPC (default: public node) |
+| `CLOB_API_URL` | No | Custom CLOB API URL |
+
+### Database
+
+The bot stores data in `copytrader.db` (SQLite) in the project root:
+
+- **copytrade_configs** - Session configurations
+- **executed_trades** - All executed and skipped trades
+
+---
+
+## Project Structure
+
+```
+src/
+├── cli/
+│   ├── setup.ts          # setup-account command
+│   ├── copytrade.ts       # copytrade command
+│   └── status.ts          # status command
+├── services/
+│   ├── account.service.ts # Account validation
+│   └── copytrade.service.ts # Core trading logic
+├── clients/
+│   └── polymarket.client.ts # Polymarket API client
+├── repositories/
+│   └── trade.repository.ts  # Database operations
+├── types/
+│   └── index.ts           # TypeScript interfaces
+└── index.ts               # CLI entry point
+```
+
+---
+
+## Multiple Traders
+
+To copy multiple traders simultaneously, run separate terminal instances:
+
+**Terminal 1:**
+```bash
+npm run dev -- copytrade -t 0xTRADER_A -b 50 -p 100 -m 10
+```
+
+**Terminal 2:**
+```bash
+npm run dev -- copytrade -t 0xTRADER_B -b 50 -p 50 -m 5
+```
+
+Each session tracks positions independently.
+
+---
 
 ## Development
 
 ```bash
-# Run in development mode
+# Development mode (with hot reload)
 npm run dev -- <command>
 
 # Build for production
 npm run build
 
-# Run built version
+# Run production build
 npm start -- <command>
 ```
+
+---
 
 ## License
 
