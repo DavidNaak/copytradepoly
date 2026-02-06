@@ -346,18 +346,20 @@ export class PolymarketClient {
       await this.deriveApiCredentials();
     }
 
-    // Proxy wallets don't need token approvals - they handle this internally
-    if (this.signatureType === 2) {
-      console.log('  ✓ Proxy wallet - no approvals needed');
-      return { success: true, balance: 0 };
-    }
-
     try {
-      // Check current allowance from API (avoids extra RPC calls)
+      // Get balance from CLOB API (works for both EOA and proxy wallets)
       const balanceAllowance = await this.clobClient!.getBalanceAllowance({
         asset_type: AssetType.COLLATERAL
       });
-      const balance = parseFloat(balanceAllowance.balance || '0');
+      // CLOB API returns balance in micro-units (6 decimals for USDC)
+      const balanceRaw = parseFloat(balanceAllowance.balance || '0');
+      const balance = balanceRaw / 1_000_000;
+
+      // Proxy wallets don't need token approvals - they handle this internally
+      if (this.signatureType === 2) {
+        console.log('  ✓ Proxy wallet - no approvals needed');
+        return { success: true, balance };
+      }
 
       // API returns allowances as object with contract addresses as keys
       const apiAllowances = (balanceAllowance as any).allowances || {};
