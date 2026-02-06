@@ -333,6 +333,34 @@ When the trader makes multiple sells quickly, the bot processes them in the same
 
 This prevents over-selling in all cases.
 
+### BUY Fails with "Not enough liquidity"
+
+```
+✗ BUY failed: Not enough liquidity in order book (order killed)
+```
+
+The bot uses **FOK (Fill-or-Kill)** orders, which means the entire order must be filled immediately or it's cancelled. This error occurs when there aren't enough sellers at the current price to fill your order.
+
+**Why FOK?**
+- Ensures you get the expected price (no partial fills at worse prices)
+- Prevents orders from sitting open in the order book
+- Clean execution: either it works or it doesn't
+
+**Common causes:**
+- Low-liquidity markets (long-shot outcomes, new markets)
+- Large order relative to available liquidity
+- Fast-moving markets where price changed
+
+**The bot will:**
+1. Log the failure cleanly (no API dump)
+2. Mark the trade as FAILED in the database
+3. Continue processing other trades
+4. Not deduct from your budget (order wasn't filled)
+
+**If this happens frequently:**
+- Consider reducing `--max-trade` size
+- The trader you're copying may be trading illiquid markets
+
 ---
 
 ## Configuration Reference
