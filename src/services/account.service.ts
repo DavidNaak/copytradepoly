@@ -40,12 +40,12 @@ export class AccountService {
 
       // Set up token allowance
       console.log('\nSetting up token allowance...');
-      const allowanceSet = await client.checkAndSetAllowance();
+      const allowanceResult = await client.checkAndSetAllowance();
 
-      if (!allowanceSet) {
+      if (!allowanceResult.success) {
         return {
           success: false,
-          error: 'Failed to set token allowance',
+          error: 'Failed to set token allowance (see above)',
         };
       }
 
