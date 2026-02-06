@@ -146,8 +146,17 @@ export class PolymarketClient {
         }));
 
       return trades as PolymarketTrade[];
-    } catch (error) {
-      console.error('Error fetching trades:', error);
+    } catch (error: any) {
+      // Clean error messages for common network issues
+      if (error?.cause?.code === 'UND_ERR_CONNECT_TIMEOUT') {
+        console.log('  ⚠️  Network timeout fetching trades (will retry next poll)');
+      } else if (error?.cause?.code === 'ENOTFOUND' || error?.cause?.code === 'ECONNREFUSED') {
+        console.log('  ⚠️  Network error - cannot reach Polymarket API (will retry)');
+      } else if (error.message?.includes('fetch failed')) {
+        console.log('  ⚠️  Network error fetching trades (will retry next poll)');
+      } else {
+        console.error('Error fetching trades:', error.message || error);
+      }
       return [];
     }
   }
