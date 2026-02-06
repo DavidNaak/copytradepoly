@@ -52,7 +52,7 @@ export interface ExecutedTrade {
   originalSize: number;
   executedSize: number;
   price: number;
-  status: 'SUCCESS' | 'FAILED' | 'PENDING';
+  status: 'SUCCESS' | 'FAILED' | 'PENDING' | 'SKIPPED';
   orderId?: string;
   errorMessage?: string;
   createdAt?: string;

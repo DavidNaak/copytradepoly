@@ -147,6 +147,7 @@ export class CopytradeService {
         console.log(`\n⏭️  Skipping BUY (already hold position in this session):`);
         console.log(`  Market: ${trade.title} - ${trade.outcome}`);
       }
+      this.markTradeSkipped(trade, config, 'Already hold position');
       return;
     }
 
@@ -167,6 +168,7 @@ export class CopytradeService {
           console.log(`\n⏭️  Skipping BUY (no budget, waiting for sells):`);
           console.log(`  Market: ${trade.title} - ${trade.outcome}`);
         }
+        this.markTradeSkipped(trade, config, 'No budget');
         return;
       }
       console.log(`Adjusted trade amount from $${tradeAmount.toFixed(2)} to $${config.remainingBudget.toFixed(2)} due to budget constraint`);
@@ -177,6 +179,7 @@ export class CopytradeService {
       if (verbose) {
         console.log('Trade amount too small or no budget remaining. Skipping.');
       }
+      this.markTradeSkipped(trade, config, 'Trade amount too small');
       return;
     }
 
@@ -188,6 +191,7 @@ export class CopytradeService {
         console.log(`  Original trade: $${originalCost.toFixed(2)} (${originalSize.toFixed(2)} shares @ $${price.toFixed(4)})`);
         console.log(`  Your copy (${config.copyPercentage}%): $${tradeAmount.toFixed(2)}`);
       }
+      this.markTradeSkipped(trade, config, 'Below $1 minimum');
       return;
     }
 
@@ -277,6 +281,7 @@ export class CopytradeService {
         console.log(`\n⏭️  Skipping SELL (no position in this session):`);
         console.log(`  Market: ${trade.title} - ${trade.outcome}`);
       }
+      this.markTradeSkipped(trade, config, 'No position in session');
       return;
     }
 
@@ -292,15 +297,8 @@ export class CopytradeService {
       ourSellValue = position.costBasis;
     }
 
-    // Check minimum order size
-    if (ourSellValue < MIN_ORDER_SIZE_USD) {
-      if (verbose) {
-        console.log(`\n⏭️  Skipping SELL (below $1 minimum):`);
-        console.log(`  Market: ${trade.title} - ${trade.outcome}`);
-        console.log(`  Our sell value: $${ourSellValue.toFixed(2)}`);
-      }
-      return;
-    }
+    // No minimum for SELL - try to sell any amount, let API decide
+    // This ensures we can exit small positions
 
     // Calculate shares to sell based on current price
     const sharesToSell = ourSellValue / trade.price;
@@ -380,6 +378,23 @@ export class CopytradeService {
     }
   }
 
+  private markTradeSkipped(trade: PolymarketTrade, config: CopytradeConfig, reason: string): void {
+    const skippedTrade: ExecutedTrade = {
+      configId: config.id!,
+      originalTradeId: trade.transactionHash,
+      traderAddress: config.traderAddress,
+      market: trade.title,
+      assetId: trade.asset,
+      side: trade.side,
+      originalSize: trade.size,
+      executedSize: 0,
+      price: trade.price,
+      status: 'SKIPPED',
+      errorMessage: reason,
+    };
+    this.saveTradeRecord(skippedTrade);
+  }
+
   private showExitSummary(configId: number): void {
     const config = this.repository.getConfig(configId);
     const trades = this.repository.getTradesByConfig(configId, 100);
@@ -391,6 +406,10 @@ export class CopytradeService {
 
     const totalBought = buys.reduce((sum, t) => sum + (t.executedSize * t.price), 0);
     const totalSold = sells.reduce((sum, t) => sum + (t.executedSize * t.price), 0);
+    const netDeployed = totalBought - totalSold;
+
+    // Calculate realized P&L for closed positions
+    const realizedPnL = this.calculateRealizedPnL(successful);
 
     console.log('\n' + '='.repeat(50));
     console.log('📊 COPYTRADE SESSION SUMMARY');
@@ -400,6 +419,8 @@ export class CopytradeService {
     console.log(`  Trades failed: ${failed.length}`);
     console.log(`  Total bought: $${totalBought.toFixed(2)}`);
     console.log(`  Total sold: $${totalSold.toFixed(2)}`);
+    console.log(`  Net deployed: $${netDeployed.toFixed(2)}`);
+    console.log(`  Realized P&L: ${realizedPnL >= 0 ? '+' : ''}$${realizedPnL.toFixed(2)}`);
     console.log(`  Remaining budget: $${config?.remainingBudget.toFixed(2) || '0.00'}`);
 
     if (buys.length > 0) {
@@ -408,6 +429,45 @@ export class CopytradeService {
       markets.forEach(m => console.log(`    • ${m}`));
     }
     console.log('='.repeat(50) + '\n');
+  }
+
+  private calculateRealizedPnL(trades: ExecutedTrade[]): number {
+    // Group trades by asset
+    const byAsset = new Map<string, { buys: ExecutedTrade[]; sells: ExecutedTrade[] }>();
+
+    for (const trade of trades) {
+      if (!byAsset.has(trade.assetId)) {
+        byAsset.set(trade.assetId, { buys: [], sells: [] });
+      }
+      const group = byAsset.get(trade.assetId)!;
+      if (trade.side === 'BUY') {
+        group.buys.push(trade);
+      } else {
+        group.sells.push(trade);
+      }
+    }
+
+    let totalPnL = 0;
+
+    // For each asset with sells, calculate realized P&L
+    for (const [, group] of byAsset) {
+      if (group.sells.length === 0) continue;
+
+      // Calculate average buy price (weighted by shares)
+      const totalBuyShares = group.buys.reduce((sum, t) => sum + t.executedSize, 0);
+      const totalBuyCost = group.buys.reduce((sum, t) => sum + (t.executedSize * t.price), 0);
+      const avgBuyPrice = totalBuyShares > 0 ? totalBuyCost / totalBuyShares : 0;
+
+      // Calculate P&L for each sell
+      for (const sell of group.sells) {
+        const sellProceeds = sell.executedSize * sell.price;
+        const costBasis = sell.executedSize * avgBuyPrice;
+        const pnl = sellProceeds - costBasis;
+        totalPnL += pnl;
+      }
+    }
+
+    return totalPnL;
   }
 
   private sleep(ms: number): Promise<void> {
