@@ -78,6 +78,7 @@ Options:
 - `-p, --percentage <percent>`: Copy percentage (e.g., 10 = 10% of their trade) (required)
 - `-m, --max-trade <amount>`: Maximum amount per trade (required)
 - `--dry-run`: Simulate without executing trades
+- `-v, --verbose`: Show detailed polling activity
 
 ### Check Status
 
@@ -120,6 +121,44 @@ src/
 3. **Sizing**: Trade size is calculated as: `min(originalSize * copyPercentage, maxTradeSize, remainingBudget)`
 4. **Execution**: Market orders are placed via the CLOB API at the best available price
 5. **Tracking**: All executed trades are stored in SQLite for history and duplicate prevention
+
+## Common Issues
+
+### Wrong USDC Type
+
+Polymarket uses **USDC.e (bridged)**, not native USDC on Polygon. If you see:
+
+```
+Checking wallet balance...
+  Wallet Address: 0x75320178FcDd76C56ABb8939e090C9382D07E9Ae
+  ⚠️  Warning: You have $9.95 native USDC, but Polymarket uses USDC.e (bridged)
+  ⚠️  Swap native USDC to USDC.e on a DEX like Uniswap/QuickSwap
+  USDC Balance: $0.00
+```
+
+**Solution**: Swap your native USDC to USDC.e on a DEX like [QuickSwap](https://quickswap.exchange/) or [Uniswap](https://app.uniswap.org/).
+
+### Insufficient Balance
+
+```
+Error: Insufficient balance. You have $0.00 but requested $1 budget.
+Either reduce your budget or add funds to your wallet.
+```
+
+**Solution**: Ensure you have USDC.e in the wallet address shown. The bot checks the wallet derived from your `PRIVATE_KEY`, not the Polymarket proxy wallet.
+
+### Wallet Address Mismatch
+
+If you funded your Polymarket account through their website, the funds are in a **proxy wallet**, not your MetaMask wallet. The CLOB API requires funds in your actual MetaMask wallet.
+
+**Solution**:
+1. Export private key from MetaMask
+2. Check which address it derives to (shown in "Wallet Address:" log)
+3. Send USDC.e directly to that address on Polygon network
+
+### "Could not create api key" Error
+
+This is usually a temporary Polymarket API issue. The trade may still succeed - check the final status message.
 
 ## Limitations
 
