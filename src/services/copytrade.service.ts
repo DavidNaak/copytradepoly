@@ -10,6 +10,8 @@ export class CopytradeService {
   private repository: TradeRepository;
   private isRunning: boolean = false;
   private pollInterval: number = 2000; // 2 seconds (matches Polygon block time)
+  // Local cache of positions to handle rapid sells (API may be stale)
+  private positionCache: Map<string, number> = new Map();
 
   constructor(accountConfig: AccountConfig) {
     this.client = new PolymarketClient(accountConfig);
@@ -52,6 +54,9 @@ export class CopytradeService {
       try {
         pollCount++;
         const pollTime = new Date().toLocaleTimeString();
+
+        // Clear position cache at start of each poll to get fresh API data
+        this.positionCache.clear();
 
         if (verbose) {
           console.log(`[${pollTime}] Poll #${pollCount} - Fetching trades...`);
@@ -273,15 +278,40 @@ export class CopytradeService {
     dryRun: boolean,
     verbose: boolean
   ): Promise<void> {
-    // Check if we have a position to sell in THIS session
-    const position = this.repository.getSessionPosition(config.id!, trade.asset);
+    // Check if we have a position to sell in THIS session (for tracking)
+    const sessionPosition = this.repository.getSessionPosition(config.id!, trade.asset);
 
-    if (position.shares <= 0) {
+    if (sessionPosition.shares <= 0) {
       if (verbose) {
         console.log(`\n⏭️  Skipping SELL (no position in this session):`);
         console.log(`  Market: ${trade.title} - ${trade.outcome}`);
       }
       this.markTradeSkipped(trade, config, 'No position in session');
+      return;
+    }
+
+    // Get position - use minimum of API and local cache to be safe
+    // (API may be stale after recent sells in same batch, cache may be stale from previous operations)
+    const apiShares = await this.client.getPositionSize(trade.asset);
+    const cachedShares = this.positionCache.get(trade.asset);
+
+    let actualShares: number;
+    if (cachedShares !== undefined) {
+      // Use the smaller of API and cache (most conservative)
+      actualShares = Math.min(apiShares, cachedShares);
+    } else {
+      actualShares = apiShares;
+    }
+
+    // Update cache with current known position
+    this.positionCache.set(trade.asset, actualShares);
+
+    if (actualShares <= 0) {
+      if (verbose) {
+        console.log(`\n⏭️  Skipping SELL (no actual position found):`);
+        console.log(`  Market: ${trade.title} - ${trade.outcome}`);
+      }
+      this.markTradeSkipped(trade, config, 'No actual position');
       return;
     }
 
@@ -291,24 +321,32 @@ export class CopytradeService {
     // Calculate our proportional sell value
     let ourSellValue = (theirSellValue * config.copyPercentage) / 100;
 
-    // Cap at our position value (can't sell more than we have)
-    if (ourSellValue > position.costBasis) {
-      console.log(`Capping sell from $${ourSellValue.toFixed(2)} to $${position.costBasis.toFixed(2)} (our full position)`);
-      ourSellValue = position.costBasis;
+    // Calculate actual position value at current price
+    const actualPositionValue = actualShares * trade.price;
+
+    // Cap at our ACTUAL position value (can't sell more than we have)
+    if (ourSellValue > actualPositionValue) {
+      console.log(`Capping sell from $${ourSellValue.toFixed(2)} to $${actualPositionValue.toFixed(2)} (our actual position)`);
+      ourSellValue = actualPositionValue;
     }
 
     // No minimum for SELL - try to sell any amount, let API decide
     // This ensures we can exit small positions
 
-    // Calculate shares to sell based on current price
-    const sharesToSell = ourSellValue / trade.price;
+    // Calculate shares to sell based on actual value and current price
+    let sharesToSell = ourSellValue / trade.price;
+
+    // Safety cap: never try to sell more than actual shares
+    if (sharesToSell > actualShares) {
+      sharesToSell = actualShares;
+    }
 
     console.log(`\n📉 Processing SELL:`);
     console.log(`  Market: ${trade.title}`);
     console.log(`  Outcome: ${trade.outcome}`);
     console.log(`  Original: SELL $${theirSellValue.toFixed(2)} (${trade.size.toFixed(2)} shares @ $${trade.price.toFixed(4)})`);
     console.log(`  Our order: SELL ~$${ourSellValue.toFixed(2)} (~${sharesToSell.toFixed(2)} shares)`);
-    console.log(`  Our position: ${position.shares.toFixed(2)} shares worth ~$${position.costBasis.toFixed(2)}`);
+    console.log(`  Actual position: ${actualShares.toFixed(2)} shares worth ~$${actualPositionValue.toFixed(2)}`);
 
     const executedTrade: ExecutedTrade = {
       configId: config.id!,
@@ -340,6 +378,10 @@ export class CopytradeService {
           executedTrade.status = 'SUCCESS';
           executedTrade.orderId = result.orderId;
           console.log(`  ✓ SELL executed! Order ID: ${result.orderId}`);
+
+          // Update local position cache (deduct sold shares)
+          const remainingShares = actualShares - sharesToSell;
+          this.positionCache.set(trade.asset, Math.max(0, remainingShares));
 
           // Add proceeds back to budget if reinvest is enabled
           if (config.reinvest) {

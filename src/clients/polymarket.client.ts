@@ -289,6 +289,38 @@ export class PolymarketClient {
     }
   }
 
+  async getPositionSize(tokenId: string): Promise<number> {
+    try {
+      const url = new URL(`${DATA_API_URL}/positions`);
+      url.searchParams.set('user', this.config.funderAddress);
+      url.searchParams.set('sizeThreshold', '0'); // Include all positions, even small ones
+
+      const response = await fetch(url.toString(), {
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (!response.ok) {
+        console.error(`Failed to fetch positions: ${response.status}`);
+        return 0;
+      }
+
+      const positions = (await response.json()) as any[];
+
+      // Find the position for this specific token
+      // The asset field in positions is the token ID
+      const position = positions.find((p: any) => p.asset === tokenId);
+
+      if (position) {
+        return position.size || 0;
+      }
+
+      return 0;
+    } catch (error) {
+      console.error('Error fetching position:', error);
+      return 0;
+    }
+  }
+
   async placeMarketOrder(order: OrderRequest): Promise<OrderResult> {
     if (!this.clobClient) {
       await this.deriveApiCredentials();

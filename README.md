@@ -301,13 +301,37 @@ Error: Insufficient balance. You have $0.00 but requested $100 budget.
 
 ### SELL Fails with "not enough balance"
 
-The bot estimates shares when buying, but actual shares may differ due to slippage.
+This can happen for two reasons:
 
-**The bot handles this by:**
-- Fetching actual position from Polymarket API before selling
-- Using real share count, not estimated
+**1. Slippage on BUY orders:**
+When buying, the bot estimates shares received (`amount / price`), but market orders have slippage. You may receive fewer shares than estimated.
 
-If you still see errors, check network connectivity to `data-api.polymarket.com`.
+**2. Multiple SELLs in rapid succession:**
+When the trader makes multiple sells quickly, the bot processes them in the same batch. The Polymarket API may return stale position data that hasn't updated from the previous sell yet.
+
+**How the bot handles this:**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  For each SELL order:                                       │
+│                                                             │
+│  1. Fetch actual position from Polymarket API               │
+│  2. Compare with local cache (from previous sells in batch) │
+│  3. Use the SMALLER of the two (most conservative)          │
+│  4. After successful sell, update local cache               │
+│  5. Cache cleared at start of each poll cycle               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Why `min(API, cache)` works:**
+
+| Scenario | API | Cache | min() | Result |
+|----------|-----|-------|-------|--------|
+| API stale after sell | 100 | 60 | 60 | Uses accurate cache |
+| Cache stale (external change) | 60 | 100 | 60 | Uses accurate API |
+| Both accurate | 60 | 60 | 60 | Either works |
+
+This prevents over-selling in all cases.
 
 ---
 
