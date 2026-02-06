@@ -421,9 +421,24 @@ export class PolymarketClient {
       );
 
       if (contractsNeedingApproval.length > 0) {
+        const provider = new providers.JsonRpcProvider(POLYGON_RPC);
+
+        // Check POL balance before attempting approvals (need gas to sign)
+        const polBalance = await withRetry(
+          () => provider.getBalance(this.config.funderAddress),
+          'check POL balance'
+        );
+        const polAmount = parseFloat(polBalance.toString()) / 1e18;
+
+        if (polAmount < 0.001) {
+          console.log('\n  ✗ Cannot set approvals - you need POL for gas fees.');
+          console.log('  Send some POL (MATIC) to your wallet first.');
+          console.log(`  Your address: ${this.config.funderAddress}`);
+          return { success: false, balance };
+        }
+
         console.log('  Setting USDC.e approvals for Polymarket...\n');
 
-        const provider = new providers.JsonRpcProvider(POLYGON_RPC);
         const wallet = new Wallet(this.config.privateKey, provider);
         const usdcContract = new Contract(USDC_E_ADDRESS, ERC20_ABI, wallet);
         const MAX_UINT256 = '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
