@@ -74,6 +74,5 @@ export interface TokenInfo {
 export interface OrderRequest {
   tokenId: string;
   side: 'BUY' | 'SELL';
-  size: number;
-  price?: number; // For limit orders
+  amount: number; // Dollar amount for BUY orders
 }

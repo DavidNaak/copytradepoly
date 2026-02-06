@@ -119,38 +119,43 @@ export class CopytradeService {
   ): Promise<void> {
     const originalSize = trade.size;
     const price = trade.price;
+    const originalCost = originalSize * price;
 
-    // Calculate our trade size based on copy percentage
-    let tradeSize = (originalSize * config.copyPercentage) / 100;
+    // Calculate our trade amount (in dollars) based on copy percentage
+    let tradeAmount = (originalCost * config.copyPercentage) / 100;
 
     // Apply max trade size limit
-    tradeSize = Math.min(tradeSize, config.maxTradeSize);
+    tradeAmount = Math.min(tradeAmount, config.maxTradeSize);
 
     // Check against remaining budget
-    const tradeCost = tradeSize * price;
-    if (tradeCost > config.remainingBudget) {
-      tradeSize = config.remainingBudget / price;
-      console.log(`Adjusted trade size to $${tradeSize.toFixed(2)} due to budget constraint`);
+    if (tradeAmount > config.remainingBudget) {
+      console.log(`Adjusted trade amount from $${tradeAmount.toFixed(2)} to $${config.remainingBudget.toFixed(2)} due to budget constraint`);
+      tradeAmount = config.remainingBudget;
     }
 
-    if (tradeSize <= 0) {
-      console.log('Trade size too small or no budget remaining. Skipping.');
+    if (tradeAmount <= 0) {
+      console.log('Trade amount too small or no budget remaining. Skipping.');
       return;
     }
 
     // Check against Polymarket minimum order size ($1)
-    if (tradeCost < MIN_ORDER_SIZE_USD) {
-      console.log(`Trade cost ($${tradeCost.toFixed(2)}) is below Polymarket minimum ($${MIN_ORDER_SIZE_USD}). Skipping.`);
-      console.log(`  Tip: Increase your copy percentage or wait for larger trades.`);
+    if (tradeAmount < MIN_ORDER_SIZE_USD) {
+      console.log(`\n⏭️  Skipping trade (below $1 minimum):`);
+      console.log(`  Market: ${trade.title} - ${trade.outcome}`);
+      console.log(`  Original trade: $${originalCost.toFixed(2)} (${originalSize.toFixed(2)} shares @ $${price.toFixed(4)})`);
+      console.log(`  Your copy (${config.copyPercentage}%): $${tradeAmount.toFixed(2)}`);
+      console.log(`  Reason: Polymarket requires minimum $1 orders`);
       return;
     }
 
-    console.log(`\nProcessing trade:`);
+    // Estimate shares we'll get (actual may vary based on market)
+    const estimatedShares = tradeAmount / price;
+
+    console.log(`\n📈 Processing trade:`);
     console.log(`  Market: ${trade.title}`);
     console.log(`  Outcome: ${trade.outcome}`);
-    console.log(`  Original: ${trade.side} ${originalSize.toFixed(2)} shares @ $${price.toFixed(4)}`);
-    console.log(`  Our size: ${tradeSize.toFixed(2)} shares (${config.copyPercentage}% of original)`);
-    console.log(`  Cost: $${(tradeSize * price).toFixed(2)}`);
+    console.log(`  Original: ${trade.side} $${originalCost.toFixed(2)} (${originalSize.toFixed(2)} shares @ $${price.toFixed(4)})`);
+    console.log(`  Our order: $${tradeAmount.toFixed(2)} (~${estimatedShares.toFixed(2)} shares at current price)`);
 
     const executedTrade: ExecutedTrade = {
       configId: config.id!,
@@ -160,7 +165,7 @@ export class CopytradeService {
       assetId: trade.asset,
       side: trade.side,
       originalSize,
-      executedSize: tradeSize,
+      executedSize: estimatedShares,
       price,
       status: 'PENDING',
     };
@@ -171,11 +176,11 @@ export class CopytradeService {
       executedTrade.orderId = 'dry-run';
     } else {
       try {
-        // Execute the trade via CLOB API
+        // Execute the trade via CLOB API using dollar amount
         const result = await this.client.placeMarketOrder({
           tokenId: trade.asset,
           side: 'BUY',
-          size: tradeSize,
+          amount: tradeAmount,
         });
 
         if (result.success && result.orderId) {
@@ -184,7 +189,7 @@ export class CopytradeService {
           console.log(`  ✓ Trade executed! Order ID: ${result.orderId}`);
 
           // Update remaining budget
-          this.repository.updateBudget(config.id!, config.remainingBudget - tradeCost);
+          this.repository.updateBudget(config.id!, config.remainingBudget - tradeAmount);
         } else {
           executedTrade.status = 'FAILED';
           executedTrade.errorMessage = result.errorMessage || 'Order submission failed - no order ID returned';

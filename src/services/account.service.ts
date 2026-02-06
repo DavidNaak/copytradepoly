@@ -26,6 +26,21 @@ export class AccountService {
         };
       }
 
+      // Check balance
+      console.log('\nChecking balance...');
+      const balance = await client.getBalance();
+
+      // Set up token allowance
+      console.log('\nSetting up token allowance...');
+      const allowanceSet = await client.checkAndSetAllowance();
+
+      if (!allowanceSet) {
+        return {
+          success: false,
+          error: 'Failed to set token allowance',
+        };
+      }
+
       return {
         success: true,
         address: config.funderAddress,

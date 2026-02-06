@@ -167,44 +167,18 @@ export class PolymarketClient {
     }
 
     try {
-      // For market orders, we need to get the current best price first
-      // and then place a limit order at that price (or slightly worse to ensure fill)
-      const orderBook = await this.clobClient!.getOrderBook(order.tokenId);
-
-      // Get the best ask price for buy orders
-      let price: number;
       const side = order.side === 'BUY' ? Side.BUY : Side.SELL;
 
-      if (order.side === 'BUY') {
-        // For buys, we take from the asks (sellers)
-        const bestAsk = orderBook.asks?.[0];
-        if (!bestAsk) {
-          throw new Error('No asks available in order book');
-        }
-        price = parseFloat(bestAsk.price);
-        // Add a small buffer to ensure fill (max 0.99 per Polymarket rules)
-        price = Math.min(price * 1.01, 0.99);
-      } else {
-        // For sells, we take from the bids (buyers)
-        const bestBid = orderBook.bids?.[0];
-        if (!bestBid) {
-          throw new Error('No bids available in order book');
-        }
-        price = parseFloat(bestBid.price);
-        // Subtract a small buffer to ensure fill (min 0.001 per Polymarket rules)
-        price = Math.max(price * 0.99, 0.001);
-      }
-
-      // Create and sign the order
-      const signedOrder = await this.clobClient!.createOrder({
+      // Use createMarketOrder which accepts dollar amounts for BUY orders
+      // This is the proper way to place market orders on Polymarket
+      const signedOrder = await this.clobClient!.createMarketOrder({
         tokenID: order.tokenId,
-        price: price,
-        size: order.size,
+        amount: order.amount, // Dollar amount for BUY orders
         side: side,
       });
 
-      // Submit the order
-      const response = await this.clobClient!.postOrder(signedOrder);
+      // Submit the order as FOK (Fill or Kill)
+      const response = await this.clobClient!.postOrder(signedOrder, 'FOK' as any);
 
       // Verify we got a valid order ID back
       if (!response.orderID) {
@@ -236,6 +210,33 @@ export class PolymarketClient {
     } catch (error) {
       console.error('Cancel order error:', error);
       return false;
+    }
+  }
+
+  async checkAndSetAllowance(): Promise<{ success: boolean; balance: number }> {
+    if (!this.clobClient) {
+      await this.deriveApiCredentials();
+    }
+
+    try {
+      // Check current allowance
+      const balanceAllowance = await this.clobClient!.getBalanceAllowance();
+      const balance = parseFloat(balanceAllowance.balance);
+      console.log(`  Allowance: ${balanceAllowance.allowance}`);
+
+      // If allowance is 0 or low, set it
+      if (parseFloat(balanceAllowance.allowance) < 1000000) {
+        console.log('  Setting allowance for Polymarket...');
+        await this.clobClient!.updateBalanceAllowance();
+        console.log('  Allowance set successfully!');
+      } else {
+        console.log('  Allowance already sufficient.');
+      }
+
+      return { success: true, balance };
+    } catch (error) {
+      console.error('Allowance check/set error:', error);
+      return { success: false, balance: 0 };
     }
   }
 }

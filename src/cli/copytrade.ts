@@ -38,12 +38,18 @@ export const copytradeCommand = new Command('copytrade')
         process.exit(1);
       }
 
-      // Check USDC balance
-      console.log('\nChecking wallet balance...');
+      // Check allowance and get balance from Polymarket API
+      console.log('\nChecking wallet balance and allowance...');
       console.log(`  Wallet Address: ${funderAddress}`);
       const client = new PolymarketClient({ privateKey, funderAddress });
-      const balance = await client.getBalance();
+      const { success: allowanceOk, balance } = await client.checkAndSetAllowance();
       console.log(`  USDC Balance: $${balance.toFixed(2)}`);
+
+      if (!allowanceOk) {
+        console.error('\nError: Failed to verify/set token allowance.');
+        console.error('Run "copytrader setup-account" to initialize your account.');
+        process.exit(1);
+      }
 
       if (balance < options.budget) {
         console.error(`\nError: Insufficient balance. You have $${balance.toFixed(2)} but requested $${options.budget} budget.`);
