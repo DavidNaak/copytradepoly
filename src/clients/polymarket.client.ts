@@ -4,7 +4,35 @@ import { AccountConfig, PolymarketTrade, OrderRequest } from '../types';
 
 const CLOB_API_URL = process.env.CLOB_API_URL || 'https://clob.polymarket.com';
 const DATA_API_URL = 'https://data-api.polymarket.com';
-const POLYGON_RPC = 'https://polygon-rpc.com';
+const POLYGON_RPC = process.env.POLYGON_RPC_URL || 'https://polygon-bor-rpc.publicnode.com';
+
+// Retry helper for RPC operations that may hit rate limits
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  operationName: string,
+  maxRetries = 3
+): Promise<T> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const isRateLimit =
+        error.message?.includes('rate limit') ||
+        error.message?.includes('Too many requests') ||
+        error.code === -32090 ||
+        error.code === 'SERVER_ERROR';
+
+      if (attempt < maxRetries && isRateLimit) {
+        const delay = 2000 * attempt; // 2s, 4s, 6s
+        console.log(`  ⚠️  Rate limited, retrying ${operationName} in ${delay / 1000}s... (${attempt}/${maxRetries})`);
+        await new Promise((r) => setTimeout(r, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
+  throw new Error(`${operationName} failed after ${maxRetries} retries`);
+}
 
 // USDC tokens on Polygon
 const USDC_E_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'; // USDC.e (bridged) - used by Polymarket
@@ -105,8 +133,11 @@ export class PolymarketClient {
     try {
       const provider = new providers.JsonRpcProvider(POLYGON_RPC);
 
-      // Check POL (native token for gas)
-      const polBalance = await provider.getBalance(this.config.funderAddress);
+      // Check POL (native token for gas) with retry
+      const polBalance = await withRetry(
+        () => provider.getBalance(this.config.funderAddress),
+        'check POL balance'
+      );
       const polAmount = parseFloat(polBalance.toString()) / 1e18;
       if (polAmount < 0.01) {
         console.log(`  ⚠️  Warning: Low POL balance (${polAmount.toFixed(4)} POL). You need POL for gas fees on Polygon.`);
@@ -114,14 +145,24 @@ export class PolymarketClient {
 
       // Check USDC.e (bridged) - this is what Polymarket uses
       const usdcEContract = new Contract(USDC_E_ADDRESS, ERC20_ABI, provider);
-      const usdcEBalance = await usdcEContract.balanceOf(this.config.funderAddress);
-      const usdcEDecimals = await usdcEContract.decimals();
+      const [usdcEBalance, usdcEDecimals] = await withRetry(
+        () => Promise.all([
+          usdcEContract.balanceOf(this.config.funderAddress),
+          usdcEContract.decimals(),
+        ]),
+        'check USDC.e balance'
+      );
       const usdcEAmount = parseFloat(usdcEBalance.toString()) / Math.pow(10, usdcEDecimals);
 
       // Also check native USDC in case user sent the wrong one
       const usdcNativeContract = new Contract(USDC_NATIVE_ADDRESS, ERC20_ABI, provider);
-      const usdcNativeBalance = await usdcNativeContract.balanceOf(this.config.funderAddress);
-      const usdcNativeDecimals = await usdcNativeContract.decimals();
+      const [usdcNativeBalance, usdcNativeDecimals] = await withRetry(
+        () => Promise.all([
+          usdcNativeContract.balanceOf(this.config.funderAddress),
+          usdcNativeContract.decimals(),
+        ]),
+        'check native USDC balance'
+      );
       const usdcNativeAmount = parseFloat(usdcNativeBalance.toString()) / Math.pow(10, usdcNativeDecimals);
 
       if (usdcNativeAmount > 0 && usdcEAmount === 0) {
@@ -268,14 +309,20 @@ export class PolymarketClient {
         const usdcContract = new Contract(USDC_E_ADDRESS, ERC20_ABI, wallet);
         const MAX_UINT256 = '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
 
-        // Get current gas price and add buffer for Polygon
-        const feeData = await provider.getFeeData();
+        // Get current gas price with retry (RPC call)
+        const feeData = await withRetry(
+          () => provider.getFeeData(),
+          'get gas price'
+        );
         const gasPrice = feeData.gasPrice?.mul(2) || '50000000000'; // 50 gwei fallback
 
         for (const contract of contractsNeedingApproval) {
           process.stdout.write(`  Approving ${contract.name}...`);
-          const tx = await usdcContract.approve(contract.address, MAX_UINT256, { gasPrice });
-          await tx.wait();
+          // Wrap approval in retry logic
+          await withRetry(async () => {
+            const tx = await usdcContract.approve(contract.address, MAX_UINT256, { gasPrice });
+            await tx.wait();
+          }, `approve ${contract.name}`);
           console.log(' ✓');
         }
 
