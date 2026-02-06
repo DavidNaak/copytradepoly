@@ -10,18 +10,27 @@ export class CopytradeService {
   private repository: TradeRepository;
   private isRunning: boolean = false;
   private pollInterval: number = 5000; // 5 seconds
+  private heldPositions: Set<string> = new Set();
 
   constructor(accountConfig: AccountConfig) {
     this.client = new PolymarketClient(accountConfig);
     this.repository = new TradeRepository();
   }
 
-  async start(config: CopytradeConfig, dryRun: boolean = false, verbose: boolean = false): Promise<void> {
+  async start(
+    config: CopytradeConfig,
+    dryRun: boolean = false,
+    verbose: boolean = false,
+    allowAddToPosition: boolean = false
+  ): Promise<void> {
     // Save config to database
     const savedConfig = this.repository.saveConfig(config);
     const configId = savedConfig.id!;
 
     this.isRunning = true;
+
+    // Load existing held positions from database
+    this.heldPositions = this.repository.getHeldPositions();
 
     // Use Unix timestamp (seconds) for comparison
     let lastProcessedTimestamp = Math.floor(Date.now() / 1000);
@@ -32,6 +41,7 @@ export class CopytradeService {
       console.log('\n\nStopping copytrade...');
       this.isRunning = false;
       this.repository.deactivateConfig(configId);
+      this.showExitSummary(configId);
       process.exit(0);
     });
 
@@ -95,7 +105,7 @@ export class CopytradeService {
               break;
             }
 
-            await this.processTrade(trade, savedConfig, dryRun);
+            await this.processTrade(trade, savedConfig, dryRun, allowAddToPosition);
           }
 
           // Update last processed timestamp
@@ -122,13 +132,25 @@ export class CopytradeService {
       // Wait before next poll
       await this.sleep(this.pollInterval);
     }
+
+    // Show summary when exiting normally (e.g., budget exhausted)
+    this.showExitSummary(configId);
   }
 
   private async processTrade(
     trade: PolymarketTrade,
     config: CopytradeConfig,
-    dryRun: boolean
+    dryRun: boolean,
+    allowAddToPosition: boolean
   ): Promise<void> {
+    // Skip if we already have this position (unless flag is set)
+    if (!allowAddToPosition && this.heldPositions.has(trade.asset)) {
+      console.log(`\n⏭️  Skipping trade (already hold position):`);
+      console.log(`  Market: ${trade.title} - ${trade.outcome}`);
+      console.log(`  Reason: Already have position in this market`);
+      return;
+    }
+
     const originalSize = trade.size;
     const price = trade.price;
     const originalCost = originalSize * price;
@@ -204,6 +226,9 @@ export class CopytradeService {
           const newBudget = config.remainingBudget - tradeAmount;
           this.repository.updateBudget(config.id!, newBudget);
           config.remainingBudget = newBudget;
+
+          // Track that we now hold this position
+          this.heldPositions.add(trade.asset);
         } else {
           executedTrade.status = 'FAILED';
           executedTrade.errorMessage = result.errorMessage || 'Order submission failed - no order ID returned';
@@ -211,9 +236,19 @@ export class CopytradeService {
         }
 
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+
+        // Check if it's a balance/allowance error - stop gracefully
+        if (errorMsg.includes('not enough balance') || errorMsg.includes('allowance')) {
+          console.error(`\n🛑 Stopping: Insufficient balance or allowance`);
+          this.isRunning = false;
+          return; // Don't save failed trade, just stop
+        }
+
+        // Other errors - log and continue
         executedTrade.status = 'FAILED';
-        executedTrade.errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        console.error(`  ✗ Trade failed: ${executedTrade.errorMessage}`);
+        executedTrade.errorMessage = errorMsg;
+        console.error(`  ✗ Trade failed: ${errorMsg}`);
       }
     }
 
@@ -228,6 +263,31 @@ export class CopytradeService {
         throw error;
       }
     }
+  }
+
+  private showExitSummary(configId: number): void {
+    const config = this.repository.getConfig(configId);
+    const trades = this.repository.getTradesByConfig(configId, 100);
+
+    const successful = trades.filter(t => t.status === 'SUCCESS');
+    const failed = trades.filter(t => t.status === 'FAILED');
+    const totalSpent = config ? config.budget - config.remainingBudget : 0;
+
+    console.log('\n' + '='.repeat(50));
+    console.log('📊 COPYTRADE SESSION SUMMARY');
+    console.log('='.repeat(50));
+    console.log(`  Trades executed: ${successful.length}`);
+    console.log(`  Trades failed: ${failed.length}`);
+    console.log(`  Total spent: $${totalSpent.toFixed(2)}`);
+    console.log(`  Remaining budget: $${config?.remainingBudget.toFixed(2) || '0.00'}`);
+    console.log(`  Positions held: ${this.heldPositions.size}`);
+
+    if (successful.length > 0) {
+      console.log('\n  Markets entered:');
+      const markets = [...new Set(successful.map(t => t.market))];
+      markets.forEach(m => console.log(`    • ${m}`));
+    }
+    console.log('='.repeat(50) + '\n');
   }
 
   private sleep(ms: number): Promise<void> {

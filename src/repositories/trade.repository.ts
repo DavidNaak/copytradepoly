@@ -149,6 +149,23 @@ export class TradeRepository {
     return !!row;
   }
 
+  hasPositionInMarket(assetId: string): boolean {
+    const stmt = this.db.prepare(`
+      SELECT 1 FROM executed_trades
+      WHERE asset_id = ? AND status = 'SUCCESS'
+    `);
+    const row = stmt.get(assetId);
+    return !!row;
+  }
+
+  getHeldPositions(): Set<string> {
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT asset_id FROM executed_trades WHERE status = 'SUCCESS'
+    `);
+    const rows = stmt.all() as any[];
+    return new Set(rows.map(r => r.asset_id));
+  }
+
   getTradesByConfig(configId: number, limit: number = 10): ExecutedTrade[] {
     const stmt = this.db.prepare(`
       SELECT * FROM executed_trades
