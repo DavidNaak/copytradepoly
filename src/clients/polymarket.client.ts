@@ -353,9 +353,29 @@ export class PolymarketClient {
         orderId: response.orderID,
         success: true,
       };
-    } catch (error) {
-      console.error('Order placement error:', error);
-      throw error;
+    } catch (error: any) {
+      // Parse common API errors into user-friendly messages
+      const errorData = error?.response?.data?.error || error?.message || String(error);
+
+      if (errorData.includes('fully filled or killed') || errorData.includes('FOK')) {
+        return {
+          orderId: '',
+          success: false,
+          errorMessage: 'Not enough liquidity in order book (order killed)',
+        };
+      }
+
+      if (errorData.includes('not enough balance') || errorData.includes('allowance')) {
+        // Re-throw balance errors so they can trigger session stop
+        throw error;
+      }
+
+      // For other errors, return clean message
+      return {
+        orderId: '',
+        success: false,
+        errorMessage: errorData,
+      };
     }
   }
 
