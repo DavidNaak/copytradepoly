@@ -43,15 +43,10 @@ export const copytradeCommand = new Command('copytrade')
       const balance = await client.getBalance();
       console.log(`  USDC Balance: $${balance.toFixed(2)}`);
 
-      if (!options.dryRun && balance < options.budget) {
+      if (balance < options.budget) {
         console.error(`\nError: Insufficient balance. You have $${balance.toFixed(2)} but requested $${options.budget} budget.`);
         console.error('Either reduce your budget or add funds to your wallet.');
-        console.error('Or use --dry-run to simulate without real trades.');
         process.exit(1);
-      }
-
-      if (options.dryRun && balance < options.budget) {
-        console.log(`\n⚠️  Warning: Balance ($${balance.toFixed(2)}) is less than budget ($${options.budget}). Proceeding in dry-run mode.`);
       }
 
       const config: CopytradeConfig = {
