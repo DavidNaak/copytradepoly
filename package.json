@@ -1,0 +1,35 @@
+{
+  "name": "polymarket-copytrader",
+  "version": "1.0.0",
+  "description": "CLI copytrading bot for Polymarket",
+  "main": "dist/index.js",
+  "bin": {
+    "copytrader": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "lint": "eslint src/**/*.ts"
+  },
+  "keywords": [
+    "polymarket",
+    "copytrading",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@polymarket/clob-client": "^4.4.0",
+    "better-sqlite3": "^11.0.0",
+    "commander": "^12.0.0",
+    "dotenv": "^16.4.5",
+    "ethers": "^5.8.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.9",
+    "@types/node": "^20.11.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
