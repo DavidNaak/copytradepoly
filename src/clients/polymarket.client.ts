@@ -246,31 +246,27 @@ export class PolymarketClient {
     }
 
     try {
-      // Check current allowance from API
+      // Check current allowance from API (avoids extra RPC calls)
       const balanceAllowance = await this.clobClient!.getBalanceAllowance({
         asset_type: AssetType.COLLATERAL
       });
       const balance = parseFloat(balanceAllowance.balance || '0');
 
-      // Check if any exchange contract needs approval
-      const provider = new providers.JsonRpcProvider(POLYGON_RPC);
-      const wallet = new Wallet(this.config.privateKey, provider);
-      const usdcContract = new Contract(USDC_E_ADDRESS, ERC20_ABI, wallet);
+      // API returns allowances as object with contract addresses as keys
+      const apiAllowances = (balanceAllowance as any).allowances || {};
 
-      // Max uint256 for unlimited approval
-      const MAX_UINT256 = '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
-
-      // Check which contracts need approval
-      const contractsNeedingApproval: typeof EXCHANGE_CONTRACTS = [];
-      for (const contract of EXCHANGE_CONTRACTS) {
-        const currentAllowance = await usdcContract.allowance(this.config.funderAddress, contract.address);
-        if (currentAllowance.toString() === '0') {
-          contractsNeedingApproval.push(contract);
-        }
-      }
+      // Find which contracts need approval based on API data
+      const contractsNeedingApproval = EXCHANGE_CONTRACTS.filter(
+        contract => apiAllowances[contract.address] === '0' || !apiAllowances[contract.address]
+      );
 
       if (contractsNeedingApproval.length > 0) {
         console.log('  Setting USDC.e approvals for Polymarket...\n');
+
+        const provider = new providers.JsonRpcProvider(POLYGON_RPC);
+        const wallet = new Wallet(this.config.privateKey, provider);
+        const usdcContract = new Contract(USDC_E_ADDRESS, ERC20_ABI, wallet);
+        const MAX_UINT256 = '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
 
         // Get current gas price and add buffer for Polygon
         const feeData = await provider.getFeeData();
