@@ -2,6 +2,9 @@ import { PolymarketClient } from '../clients/polymarket.client';
 import { TradeRepository } from '../repositories/trade.repository';
 import { AccountConfig, CopytradeConfig, PolymarketTrade, ExecutedTrade } from '../types';
 
+// Polymarket minimum order size is $1
+const MIN_ORDER_SIZE_USD = 1.0;
+
 export class CopytradeService {
   private client: PolymarketClient;
   private repository: TradeRepository;
@@ -132,6 +135,13 @@ export class CopytradeService {
 
     if (tradeSize <= 0) {
       console.log('Trade size too small or no budget remaining. Skipping.');
+      return;
+    }
+
+    // Check against Polymarket minimum order size ($1)
+    if (tradeCost < MIN_ORDER_SIZE_USD) {
+      console.log(`Trade cost ($${tradeCost.toFixed(2)}) is below Polymarket minimum ($${MIN_ORDER_SIZE_USD}). Skipping.`);
+      console.log(`  Tip: Increase your copy percentage or wait for larger trades.`);
       return;
     }
 
