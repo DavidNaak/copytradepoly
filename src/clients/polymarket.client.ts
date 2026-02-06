@@ -1,9 +1,17 @@
 import { ClobClient, Side } from '@polymarket/clob-client';
-import { Wallet } from 'ethers';
+import { Wallet, Contract, providers } from 'ethers';
 import { AccountConfig, PolymarketTrade, OrderRequest } from '../types';
 
 const CLOB_API_URL = process.env.CLOB_API_URL || 'https://clob.polymarket.com';
 const DATA_API_URL = 'https://data-api.polymarket.com';
+const POLYGON_RPC = 'https://polygon-rpc.com';
+
+// USDC.e on Polygon (used by Polymarket)
+const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+const ERC20_ABI = [
+  'function balanceOf(address owner) view returns (uint256)',
+  'function decimals() view returns (uint8)',
+];
 
 interface ApiCredentials {
   apiKey: string;
@@ -72,11 +80,19 @@ export class PolymarketClient {
   }
 
   async getBalance(): Promise<number> {
-    // Get USDC balance from the wallet
-    // This would typically query the Polygon chain for USDC balance
-    // For now, return a placeholder
-    // TODO: Implement actual balance check
-    return 0;
+    try {
+      const provider = new providers.JsonRpcProvider(POLYGON_RPC);
+      const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, provider);
+
+      const balance = await usdcContract.balanceOf(this.config.funderAddress);
+      const decimals = await usdcContract.decimals();
+
+      // Convert from smallest unit to USDC (6 decimals)
+      return parseFloat(balance.toString()) / Math.pow(10, decimals);
+    } catch (error) {
+      console.error('Error fetching balance:', error);
+      return 0;
+    }
   }
 
   async getTradesForAddress(address: string): Promise<PolymarketTrade[]> {
