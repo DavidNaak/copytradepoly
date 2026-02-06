@@ -14,8 +14,38 @@ A command-line copytrading bot for Polymarket that allows you to automatically m
 ## Prerequisites
 
 - Node.js v18+
-- A Polymarket account with USDC on Polygon
-- Your wallet private key and address
+- A Polymarket account with trading enabled
+- Your MetaMask wallet private key
+
+### Wallet Types
+
+The bot supports two wallet types. **Choose based on whether you want to see trades in the Polymarket UI:**
+
+| Type | Address to Use | Trades in UI? | Gas Fees | Setup |
+|------|---------------|---------------|----------|-------|
+| **Proxy Wallet** | Your Polymarket proxy address | Yes | No (relayer pays) | Recommended |
+| **EOA (Direct)** | Your MetaMask address | No | Yes (you pay POL) | Advanced |
+
+**Proxy Wallet (Recommended)**
+- Trades appear in polymarket.com under your positions
+- No gas fees - Polymarket's relayer handles them
+- No token approvals needed
+- Use the proxy address shown in your Polymarket account settings
+
+**EOA (Direct Wallet)**
+- Trades do NOT appear in the Polymarket UI
+- You pay gas fees in POL
+- Requires one-time USDC.e token approvals
+- Use your MetaMask wallet address directly
+
+### Finding Your Proxy Wallet Address
+
+1. Go to polymarket.com and connect your MetaMask
+2. Open browser DevTools (F12) → Network tab
+3. Look for API requests - your proxy address appears in the responses
+4. Or check: `https://data-api.polymarket.com/profiles?user=YOUR_METAMASK_ADDRESS`
+
+The bot auto-detects which wallet type you're using based on the address in your `.env` file.
 
 ## Installation
 
@@ -40,9 +70,12 @@ cp .env.example .env
 
 2. Edit `.env` with your credentials:
 ```
-PRIVATE_KEY=your_wallet_private_key
-FUNDER_ADDRESS=your_wallet_address
+PRIVATE_KEY=your_metamask_private_key
+FUNDER_ADDRESS=your_proxy_or_eoa_address
 ```
+
+- `PRIVATE_KEY`: Your MetaMask private key (same for both wallet types)
+- `FUNDER_ADDRESS`: Either your proxy wallet address (recommended) or your MetaMask EOA address
 
 **IMPORTANT**: Never commit your `.env` file or share your private key.
 
@@ -145,16 +178,19 @@ Error: Insufficient balance. You have $0.00 but requested $1 budget.
 Either reduce your budget or add funds to your wallet.
 ```
 
-**Solution**: Ensure you have USDC.e in the wallet address shown. The bot checks the wallet derived from your `PRIVATE_KEY`, not the Polymarket proxy wallet.
+**Solution**: Ensure you have USDC.e in your `FUNDER_ADDRESS`:
+- **Proxy wallet**: Deposit through polymarket.com
+- **EOA**: Send USDC.e directly to your MetaMask address on Polygon
 
 ### Wallet Address Mismatch
 
-If you funded your Polymarket account through their website, the funds are in a **proxy wallet**, not your MetaMask wallet. The CLOB API requires funds in your actual MetaMask wallet.
+If you're using a **proxy wallet** (recommended), make sure:
+1. `FUNDER_ADDRESS` is set to your proxy address, not your MetaMask address
+2. Funds are deposited through polymarket.com (they go to your proxy)
 
-**Solution**:
-1. Export private key from MetaMask
-2. Check which address it derives to (shown in "Wallet Address:" log)
-3. Send USDC.e directly to that address on Polygon network
+If you're using **EOA** (direct wallet):
+1. `FUNDER_ADDRESS` should be your MetaMask address
+2. Send USDC.e directly to that address on Polygon
 
 ### "Could not create api key" Error
 
