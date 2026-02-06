@@ -6,6 +6,25 @@ const CLOB_API_URL = process.env.CLOB_API_URL || 'https://clob.polymarket.com';
 const DATA_API_URL = 'https://data-api.polymarket.com';
 const POLYGON_RPC = process.env.POLYGON_RPC_URL || 'https://polygon-bor-rpc.publicnode.com';
 
+// Detect wallet type (EOA vs Proxy) by checking if address has contract code
+async function detectWalletType(address: string): Promise<{ type: 0 | 2; name: string }> {
+  const provider = new providers.JsonRpcProvider(POLYGON_RPC);
+  const code = await provider.getCode(address);
+
+  // No code = EOA
+  if (code === '0x') {
+    return { type: 0, name: 'EOA (direct wallet)' };
+  }
+
+  // EIP-7702 delegation indicator (0xef01) = EOA with delegation, treat as EOA
+  if (code.startsWith('0xef01')) {
+    return { type: 0, name: 'EOA (direct wallet)' };
+  }
+
+  // Has contract code = Proxy wallet (Gnosis Safe)
+  return { type: 2, name: 'Proxy wallet' };
+}
+
 // Retry helper for RPC operations that may hit rate limits
 async function withRetry<T>(
   fn: () => Promise<T>,
@@ -67,6 +86,7 @@ export class PolymarketClient {
   private config: AccountConfig;
   private clobClient: ClobClient | null = null;
   private credentials: ApiCredentials | null = null;
+  private signatureType: 0 | 2 = 0; // 0 = EOA, 2 = Proxy wallet
 
   constructor(config: AccountConfig) {
     this.config = config;
@@ -121,10 +141,12 @@ export class PolymarketClient {
       apiPassphrase: creds.passphrase,
     };
 
-    // Signature type 0 = EOA (direct wallet like MetaMask)
-    // Signature type 1 = POLY_PROXY (Magic Link/email login)
-    // Signature type 2 = GNOSIS_SAFE (browser wallet connection via Polymarket.com)
-    const signatureType = 0; // EOA for direct private key usage
+    // Auto-detect wallet type from funder address
+    // Type 0 = EOA (direct wallet like MetaMask) - pays gas, needs approvals
+    // Type 2 = Proxy wallet (Gnosis Safe via Polymarket.com) - no approvals needed
+    const walletInfo = await detectWalletType(this.config.funderAddress);
+    this.signatureType = walletInfo.type;
+    console.log(`  Wallet type: ${walletInfo.name}`);
 
     // Now create the full client with credentials, signature type, and funder
     this.clobClient = new ClobClient(
@@ -132,7 +154,7 @@ export class PolymarketClient {
       chainId,
       wallet,
       creds,
-      signatureType,
+      this.signatureType,
       this.config.funderAddress
     );
 
@@ -189,10 +211,13 @@ export class PolymarketClient {
 
       // Display balances
       console.log(`  USDC.e: $${usdcEAmount.toFixed(2)}`);
-      console.log(`  POL (gas): ${polAmount.toFixed(4)} POL`);
+      // Only show POL balance for EOA wallets (they pay gas directly)
+      if (this.signatureType === 0) {
+        console.log(`  POL (gas): ${polAmount.toFixed(4)} POL`);
+      }
 
-      // Warnings
-      if (polAmount < 0.01) {
+      // Warnings - POL warning only for EOA wallets
+      if (this.signatureType === 0 && polAmount < 0.01) {
         console.log(`\n  ⚠️  Low POL balance! You need POL for gas fees on Polygon.`);
       }
 
@@ -319,6 +344,12 @@ export class PolymarketClient {
   async checkAndSetAllowance(): Promise<{ success: boolean; balance: number }> {
     if (!this.clobClient) {
       await this.deriveApiCredentials();
+    }
+
+    // Proxy wallets don't need token approvals - they handle this internally
+    if (this.signatureType === 2) {
+      console.log('  ✓ Proxy wallet - no approvals needed');
+      return { success: true, balance: 0 };
     }
 
     try {
