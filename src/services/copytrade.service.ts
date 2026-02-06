@@ -401,8 +401,7 @@ export class CopytradeService {
     // Show executed trades
     for (const result of executed) {
       const icon = result.side === 'BUY' ? '📈' : '📉';
-      const shortMarket = result.market.length > 40 ? result.market.substring(0, 40) + '...' : result.market;
-      console.log(`✓ ${icon} ${result.side} $${result.amount?.toFixed(2)} - ${shortMarket}`);
+      console.log(`✓ ${icon} ${result.side} $${result.amount?.toFixed(2)} - ${result.market}`);
 
       if (result.side === 'BUY' && result.budgetRemaining !== undefined) {
         console.log(`  Budget: $${result.budgetRemaining.toFixed(2)}`);
@@ -415,8 +414,7 @@ export class CopytradeService {
     // Show failed trades
     for (const result of failed) {
       const icon = result.side === 'BUY' ? '📈' : '📉';
-      const shortMarket = result.market.length > 40 ? result.market.substring(0, 40) + '...' : result.market;
-      console.log(`✗ ${icon} ${result.side} $${result.amount?.toFixed(2)} - ${shortMarket}`);
+      console.log(`✗ ${icon} ${result.side} $${result.amount?.toFixed(2)} - ${result.market}`);
       console.log(`  Error: ${result.errorMessage}`);
     }
 
