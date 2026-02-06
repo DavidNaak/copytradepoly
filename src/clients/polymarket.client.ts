@@ -1,4 +1,4 @@
-import { ClobClient, Side } from '@polymarket/clob-client';
+import { ClobClient, Side, AssetType } from '@polymarket/clob-client';
 import { Wallet, Contract, providers } from 'ethers';
 import { AccountConfig, PolymarketTrade, OrderRequest } from '../types';
 
@@ -12,6 +12,15 @@ const USDC_NATIVE_ADDRESS = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'; // Nat
 const ERC20_ABI = [
   'function balanceOf(address owner) view returns (uint256)',
   'function decimals() view returns (uint8)',
+  'function approve(address spender, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+];
+
+// Polymarket exchange contracts that need USDC.e approval
+const EXCHANGE_CONTRACTS = [
+  { address: '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E', name: 'CTF Exchange' },
+  { address: '0xC5d563A36AE78145C45a50134d48A1215220f80a', name: 'Neg Risk CTF Exchange' },
+  { address: '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296', name: 'Neg Risk Adapter' },
 ];
 
 interface ApiCredentials {
@@ -49,18 +58,29 @@ export class PolymarketClient {
     // Derive API credentials
     const creds = await tempClient.createOrDeriveApiKey();
 
+    if (!creds || !creds.key) {
+      throw new Error('Failed to derive API credentials. Make sure you have enabled trading on polymarket.com with this wallet first.');
+    }
+
     this.credentials = {
       apiKey: creds.key,
       apiSecret: creds.secret,
       apiPassphrase: creds.passphrase,
     };
 
-    // Now create the full client with credentials
+    // Signature type 0 = EOA (direct wallet like MetaMask)
+    // Signature type 1 = POLY_PROXY (Magic Link/email login)
+    // Signature type 2 = GNOSIS_SAFE (browser wallet connection via Polymarket.com)
+    const signatureType = 0; // EOA for direct private key usage
+
+    // Now create the full client with credentials, signature type, and funder
     this.clobClient = new ClobClient(
       host,
       chainId,
       wallet,
-      creds // Use the original creds object which has the right type
+      creds,
+      signatureType,
+      this.config.funderAddress
     );
 
     return this.credentials;
@@ -84,6 +104,13 @@ export class PolymarketClient {
   async getBalance(): Promise<number> {
     try {
       const provider = new providers.JsonRpcProvider(POLYGON_RPC);
+
+      // Check POL (native token for gas)
+      const polBalance = await provider.getBalance(this.config.funderAddress);
+      const polAmount = parseFloat(polBalance.toString()) / 1e18;
+      if (polAmount < 0.01) {
+        console.log(`  ⚠️  Warning: Low POL balance (${polAmount.toFixed(4)} POL). You need POL for gas fees on Polygon.`);
+      }
 
       // Check USDC.e (bridged) - this is what Polymarket uses
       const usdcEContract = new Contract(USDC_E_ADDRESS, ERC20_ABI, provider);
@@ -219,18 +246,49 @@ export class PolymarketClient {
     }
 
     try {
-      // Check current allowance
-      const balanceAllowance = await this.clobClient!.getBalanceAllowance();
-      const balance = parseFloat(balanceAllowance.balance);
-      console.log(`  Allowance: ${balanceAllowance.allowance}`);
+      // Check current allowance from API
+      const balanceAllowance = await this.clobClient!.getBalanceAllowance({
+        asset_type: AssetType.COLLATERAL
+      });
+      const balance = parseFloat(balanceAllowance.balance || '0');
 
-      // If allowance is 0 or low, set it
-      if (parseFloat(balanceAllowance.allowance) < 1000000) {
-        console.log('  Setting allowance for Polymarket...');
-        await this.clobClient!.updateBalanceAllowance();
-        console.log('  Allowance set successfully!');
+      // Check if any exchange contract needs approval
+      const provider = new providers.JsonRpcProvider(POLYGON_RPC);
+      const wallet = new Wallet(this.config.privateKey, provider);
+      const usdcContract = new Contract(USDC_E_ADDRESS, ERC20_ABI, wallet);
+
+      // Max uint256 for unlimited approval
+      const MAX_UINT256 = '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+
+      // Check which contracts need approval
+      const contractsNeedingApproval: typeof EXCHANGE_CONTRACTS = [];
+      for (const contract of EXCHANGE_CONTRACTS) {
+        const currentAllowance = await usdcContract.allowance(this.config.funderAddress, contract.address);
+        if (currentAllowance.toString() === '0') {
+          contractsNeedingApproval.push(contract);
+        }
+      }
+
+      if (contractsNeedingApproval.length > 0) {
+        console.log('  Setting USDC.e approvals for Polymarket...\n');
+
+        // Get current gas price and add buffer for Polygon
+        const feeData = await provider.getFeeData();
+        const gasPrice = feeData.gasPrice?.mul(2) || '50000000000'; // 50 gwei fallback
+
+        for (const contract of contractsNeedingApproval) {
+          process.stdout.write(`  Approving ${contract.name}...`);
+          const tx = await usdcContract.approve(contract.address, MAX_UINT256, { gasPrice });
+          await tx.wait();
+          console.log(' ✓');
+        }
+
+        console.log('\n  All approvals complete!');
       } else {
-        console.log('  Allowance already sufficient.');
+        // All already approved - show status
+        for (const contract of EXCHANGE_CONTRACTS) {
+          console.log(`  ✓ ${contract.name} approved`);
+        }
       }
 
       return { success: true, balance };
