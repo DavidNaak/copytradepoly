@@ -158,8 +158,8 @@ export class PolymarketClient {
           throw new Error('No asks available in order book');
         }
         price = parseFloat(bestAsk.price);
-        // Add a small buffer to ensure fill
-        price = Math.min(price * 1.01, 1.0);
+        // Add a small buffer to ensure fill (max 0.99 per Polymarket rules)
+        price = Math.min(price * 1.01, 0.99);
       } else {
         // For sells, we take from the bids (buyers)
         const bestBid = orderBook.bids?.[0];
@@ -167,8 +167,8 @@ export class PolymarketClient {
           throw new Error('No bids available in order book');
         }
         price = parseFloat(bestBid.price);
-        // Subtract a small buffer to ensure fill
-        price = Math.max(price * 0.99, 0.01);
+        // Subtract a small buffer to ensure fill (min 0.001 per Polymarket rules)
+        price = Math.max(price * 0.99, 0.001);
       }
 
       // Create and sign the order
