@@ -9,7 +9,7 @@ export class CopytradeService {
   private client: PolymarketClient;
   private repository: TradeRepository;
   private isRunning: boolean = false;
-  private pollInterval: number = 5000; // 5 seconds
+  private pollInterval: number = 2000; // 2 seconds (matches Polygon block time)
   private heldPositions: Set<string> = new Set();
 
   constructor(accountConfig: AccountConfig) {
