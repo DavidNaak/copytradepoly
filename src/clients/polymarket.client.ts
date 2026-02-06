@@ -97,16 +97,39 @@ export class PolymarketClient {
 
   async getTradesForAddress(address: string): Promise<PolymarketTrade[]> {
     try {
-      // Use the Data API to get trades for a specific address
-      const url = `${DATA_API_URL}/trades?user=${address}&limit=100`;
+      // Use the /activity endpoint - it has real-time data (unlike /trades which is delayed)
+      const url = `${DATA_API_URL}/activity?user=${address}&limit=100`;
 
       const response = await fetch(url);
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch trades: ${response.statusText}`);
+        throw new Error(`Failed to fetch activity: ${response.statusText}`);
       }
 
-      const trades = await response.json();
+      const activities = (await response.json()) as any[];
+
+      // Filter to only TRADE type activities and map to our format
+      const trades = activities
+        .filter((a: any) => a.type === 'TRADE')
+        .map((a: any) => ({
+          proxyWallet: a.proxyWallet,
+          side: a.side,
+          asset: a.asset,
+          conditionId: a.conditionId,
+          size: a.size,
+          price: a.price,
+          timestamp: a.timestamp,
+          title: a.title,
+          slug: a.slug,
+          icon: a.icon,
+          eventSlug: a.eventSlug,
+          outcome: a.outcome,
+          outcomeIndex: a.outcomeIndex,
+          name: a.name,
+          pseudonym: a.pseudonym,
+          transactionHash: a.transactionHash,
+        }));
+
       return trades as PolymarketTrade[];
     } catch (error) {
       console.error('Error fetching trades:', error);

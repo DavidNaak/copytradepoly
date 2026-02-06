@@ -20,8 +20,8 @@ export class CopytradeService {
 
     this.isRunning = true;
 
-    // Get initial timestamp to only process new trades
-    let lastProcessedTime = new Date().toISOString();
+    // Use Unix timestamp (seconds) for comparison
+    let lastProcessedTimestamp = Math.floor(Date.now() / 1000);
     let pollCount = 0;
 
     // Handle graceful shutdown
@@ -34,7 +34,7 @@ export class CopytradeService {
 
     console.log(`Config saved with ID: ${configId}`);
     if (verbose) {
-      console.log(`Started monitoring at: ${lastProcessedTime}`);
+      console.log(`Started monitoring at: ${new Date(lastProcessedTimestamp * 1000).toISOString()}`);
       console.log(`Poll interval: ${this.pollInterval / 1000}s\n`);
     }
 
@@ -57,16 +57,23 @@ export class CopytradeService {
 
         // Filter to only new trades (after our start time) and BUY orders only
         const newTrades = trades.filter((trade) => {
-          const isNew = trade.match_time > lastProcessedTime;
+          const isNew = trade.timestamp > lastProcessedTimestamp;
           const isBuy = trade.side === 'BUY';
-          const notProcessed = !this.repository.isTradeProcessed(trade.id);
+          const notProcessed = !this.repository.isTradeProcessed(trade.transactionHash);
           return isNew && isBuy && notProcessed;
         });
 
         if (verbose) {
           const buyTrades = trades.filter(t => t.side === 'BUY').length;
-          const recentTrades = trades.filter(t => t.match_time > lastProcessedTime).length;
+          const recentTrades = trades.filter(t => t.timestamp > lastProcessedTimestamp).length;
           console.log(`[${pollTime}] Filtered: ${recentTrades} recent, ${buyTrades} buys, ${newTrades.length} new to copy`);
+
+          // Show the most recent trade timestamp for debugging
+          if (trades.length > 0) {
+            const mostRecent = Math.max(...trades.map(t => t.timestamp));
+            console.log(`[${pollTime}] Most recent trade: ${new Date(mostRecent * 1000).toLocaleString()}`);
+            console.log(`[${pollTime}] Monitoring since: ${new Date(lastProcessedTimestamp * 1000).toLocaleString()}`);
+          }
         }
 
         if (newTrades.length > 0) {
@@ -76,11 +83,11 @@ export class CopytradeService {
             await this.processTrade(trade, savedConfig, dryRun);
           }
 
-          // Update last processed time
+          // Update last processed timestamp
           const latestTrade = newTrades.reduce((latest, trade) =>
-            trade.match_time > latest.match_time ? trade : latest
+            trade.timestamp > latest.timestamp ? trade : latest
           );
-          lastProcessedTime = latestTrade.match_time;
+          lastProcessedTimestamp = latestTrade.timestamp;
         } else if (verbose) {
           console.log(`[${pollTime}] No new trades to copy\n`);
         }
@@ -107,8 +114,8 @@ export class CopytradeService {
     config: CopytradeConfig,
     dryRun: boolean
   ): Promise<void> {
-    const originalSize = parseFloat(trade.size);
-    const price = parseFloat(trade.price);
+    const originalSize = trade.size;
+    const price = trade.price;
 
     // Calculate our trade size based on copy percentage
     let tradeSize = (originalSize * config.copyPercentage) / 100;
@@ -129,16 +136,18 @@ export class CopytradeService {
     }
 
     console.log(`\nProcessing trade:`);
-    console.log(`  Original: ${trade.side} $${originalSize.toFixed(2)} @ ${price.toFixed(4)}`);
-    console.log(`  Our size: $${tradeSize.toFixed(2)} (${config.copyPercentage}% of original)`);
-    console.log(`  Market: ${trade.market}`);
+    console.log(`  Market: ${trade.title}`);
+    console.log(`  Outcome: ${trade.outcome}`);
+    console.log(`  Original: ${trade.side} ${originalSize.toFixed(2)} shares @ $${price.toFixed(4)}`);
+    console.log(`  Our size: ${tradeSize.toFixed(2)} shares (${config.copyPercentage}% of original)`);
+    console.log(`  Cost: $${(tradeSize * price).toFixed(2)}`);
 
     const executedTrade: ExecutedTrade = {
       configId: config.id!,
-      originalTradeId: trade.id,
+      originalTradeId: trade.transactionHash,
       traderAddress: config.traderAddress,
-      market: trade.market,
-      assetId: trade.asset_id,
+      market: trade.title,
+      assetId: trade.asset,
       side: trade.side,
       originalSize,
       executedSize: tradeSize,
@@ -154,7 +163,7 @@ export class CopytradeService {
       try {
         // Execute the trade via CLOB API
         const result = await this.client.placeMarketOrder({
-          tokenId: trade.asset_id,
+          tokenId: trade.asset,
           side: 'BUY',
           size: tradeSize,
         });

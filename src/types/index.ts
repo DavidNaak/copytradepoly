@@ -19,26 +19,24 @@ export interface CopytradeConfig {
   createdAt?: string;
 }
 
-// Trade from Polymarket API
+// Trade from Polymarket Data API
 export interface PolymarketTrade {
-  id: string;
-  taker_order_id: string;
-  market: string;
-  asset_id: string;
+  proxyWallet: string;
   side: 'BUY' | 'SELL';
-  size: string;
-  fee_rate_bps: string;
-  price: string;
-  status: string;
-  match_time: string;
-  last_update: string;
+  asset: string;  // This is the token ID
+  conditionId: string;
+  size: number;
+  price: number;
+  timestamp: number;  // Unix timestamp
+  title: string;
+  slug: string;
+  icon: string;
+  eventSlug: string;
   outcome: string;
-  maker_address: string;
-  trader: string; // This is the taker address
-  transaction_hash: string;
-  bucket_index: number;
-  owner: string;
-  type: string;
+  outcomeIndex: number;
+  name: string;
+  pseudonym: string;
+  transactionHash: string;
 }
 
 // Our executed trade record
