@@ -280,7 +280,7 @@ export class CopytradeService {
     console.log(`  Trades failed: ${failed.length}`);
     console.log(`  Total spent: $${totalSpent.toFixed(2)}`);
     console.log(`  Remaining budget: $${config?.remainingBudget.toFixed(2) || '0.00'}`);
-    console.log(`  Positions held: ${this.heldPositions.size}`);
+    console.log(`  Positions entered: ${successful.length}`);
 
     if (successful.length > 0) {
       console.log('\n  Markets entered:');
