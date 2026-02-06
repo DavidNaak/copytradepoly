@@ -40,6 +40,7 @@ export const copytradeCommand = new Command('copytrade')
 
       // Check USDC balance
       console.log('\nChecking wallet balance...');
+      console.log(`  Wallet Address: ${funderAddress}`);
       const client = new PolymarketClient({ privateKey, funderAddress });
       const balance = await client.getBalance();
       console.log(`  USDC Balance: $${balance.toFixed(2)}`);

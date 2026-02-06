@@ -6,8 +6,9 @@ const CLOB_API_URL = process.env.CLOB_API_URL || 'https://clob.polymarket.com';
 const DATA_API_URL = 'https://data-api.polymarket.com';
 const POLYGON_RPC = 'https://polygon-rpc.com';
 
-// USDC.e on Polygon (used by Polymarket)
-const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+// USDC tokens on Polygon
+const USDC_E_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'; // USDC.e (bridged) - used by Polymarket
+const USDC_NATIVE_ADDRESS = '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359'; // Native USDC
 const ERC20_ABI = [
   'function balanceOf(address owner) view returns (uint256)',
   'function decimals() view returns (uint8)',
@@ -82,13 +83,26 @@ export class PolymarketClient {
   async getBalance(): Promise<number> {
     try {
       const provider = new providers.JsonRpcProvider(POLYGON_RPC);
-      const usdcContract = new Contract(USDC_ADDRESS, ERC20_ABI, provider);
 
-      const balance = await usdcContract.balanceOf(this.config.funderAddress);
-      const decimals = await usdcContract.decimals();
+      // Check USDC.e (bridged) - this is what Polymarket uses
+      const usdcEContract = new Contract(USDC_E_ADDRESS, ERC20_ABI, provider);
+      const usdcEBalance = await usdcEContract.balanceOf(this.config.funderAddress);
+      const usdcEDecimals = await usdcEContract.decimals();
+      const usdcEAmount = parseFloat(usdcEBalance.toString()) / Math.pow(10, usdcEDecimals);
 
-      // Convert from smallest unit to USDC (6 decimals)
-      return parseFloat(balance.toString()) / Math.pow(10, decimals);
+      // Also check native USDC in case user sent the wrong one
+      const usdcNativeContract = new Contract(USDC_NATIVE_ADDRESS, ERC20_ABI, provider);
+      const usdcNativeBalance = await usdcNativeContract.balanceOf(this.config.funderAddress);
+      const usdcNativeDecimals = await usdcNativeContract.decimals();
+      const usdcNativeAmount = parseFloat(usdcNativeBalance.toString()) / Math.pow(10, usdcNativeDecimals);
+
+      if (usdcNativeAmount > 0 && usdcEAmount === 0) {
+        console.log(`  ⚠️  Warning: You have $${usdcNativeAmount.toFixed(2)} native USDC, but Polymarket uses USDC.e (bridged)`);
+        console.log(`  ⚠️  Swap native USDC to USDC.e on a DEX like Uniswap/QuickSwap`);
+      }
+
+      // Return USDC.e balance (what Polymarket uses)
+      return usdcEAmount;
     } catch (error) {
       console.error('Error fetching balance:', error);
       return 0;
